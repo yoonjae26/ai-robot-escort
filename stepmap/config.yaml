@@ -1,0 +1,41 @@
+topics:                              # `ros2 topic list` 결과에서 복사
+  pointcloud: /<pointcloud 토픽>
+  depth: /<depth 토픽>
+  camera_info: /<camera_info 토픽>
+  rgb: /<rgb 토픽>
+  odom: /<odom 토픽>
+  lowstate: /lowstate
+frames:                              # `ros2 topic echo <토픽> --field header.frame_id --once`
+  fixed: odom
+  base: base_link
+  camera: <카메라 frame_id>
+geo:                                 # 지도 배경용. 출발점 기준 평면 근사로 odom → 위도·경도
+  origin_lat: <출발점 위도>
+  origin_lon: <출발점 경도>
+  heading_deg: 0                     # odom x축 방위각 (북=0, 동=90)
+calib:
+  camera_tilt_offset_deg: 0.0        # 평지 정지 녹화로 구함
+  imu_pitch_sign: 1
+robot:                               # URDF(go2_description)와 대조
+  name: Unitree Go2 EDU              # 대시보드 측정 세션 정보의 '로봇'
+  hip_x: 0.1934
+  hip_y: 0.0465
+  l1: 0.0955
+  l2: 0.213
+  l3: 0.213
+thresholds:
+  step_warn_cm: 1.0
+  step_danger_cm: 2.0
+  slope_warn_deg: 4.76
+  slope_danger_deg: 7.13
+  crack_warn: 0.5
+  crack_danger: 0.8
+  loose_warn_mm: 3.0
+  loose_danger_mm: 6.0
+merge:                               # stepmap merge (계획서 9.3). 거리는 이하(경계 포함)
+  step_radius_m: 1.0                 # 카메라 단차 ↔ 발 단차를 한 건(camera+foot)으로 합치는 거리
+  step_window_s: 10                  # 〃 시간 차 (카메라가 먼저 보고 발이 나중에 밟는다)
+  dedup_radius_m: 1.0                # 같은 종류(균열·경사)가 여러 번 잡히면 confidence 최고 하나만
+  dedup_window_s: 10
+report:
+  area: 제주시 노형동·연동            # 신고서 요약의 '구간'

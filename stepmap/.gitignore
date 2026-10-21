@@ -1,0 +1,10 @@
+# 파이썬 캐시
+__pycache__/
+*.pyc
+
+# 생성물: stepmap map/report가 만드는 사진 사본
+outputs/photos/
+
+# 설치·테스트 생성물
+stepmap.egg-info/
+.pytest_cache/

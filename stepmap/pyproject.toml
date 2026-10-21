@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stepmap"
+version = "0.1.0"
+description = "사족보행 로봇으로 보도의 단차·균열·흔들리는 블럭을 측정하고 지도로 보여주는 CLI 도구"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["pyyaml>=6", "pillow>=10"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+stepmap = "stepmap.cli:main"
+
+[tool.setuptools]
+packages = ["stepmap"]
