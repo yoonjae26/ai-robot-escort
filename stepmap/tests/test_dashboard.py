@@ -7,7 +7,7 @@ import pytest
 from stepmap import demo
 from stepmap.dashboard import LEAFLET_VERSION, MissingLatLon, build_html, write_dashboard
 from stepmap.events import (DEFAULT_THRESHOLDS, EVENT_COLUMNS, criterion_text, display_meters, exceed_ratio, path_length,
-                            read_events, read_trajectory)
+                            read_blocks, read_events, read_trajectory)
 
 
 @pytest.fixture(scope="module")
@@ -42,23 +42,21 @@ def test_leaflet_pinned_and_attribution(page):
     assert f"leaflet@{LEAFLET_VERSION}/dist/leaflet.js" in page
     assert 'integrity="sha256-' in page
     assert "tile.openstreetmap.org" not in page  # Referer 없는 file:// 요청을 거부하는 서버
-    assert "tile.opentopomap.org" in page
-    assert "basemaps.cartocdn.com" not in page  # 키 없는 요청에 워터마크 타일
-    assert "OpenStreetMap</a> contributors, SRTM" in page and "OpenTopoMap</a>" in page and "CC-BY-SA" in page
+    assert "tile.opentopomap.org" in page  # CARTO를 못 받을 때 대신 쓰는 타일
     assert "--tile-filter: grayscale(1) invert(1)" in page  # 다크 모드
     assert 'setPosition("bottomright")' in page
 
 
 
 def test_map_background_toggle(page):
-    """지도 배경은 페이지 테마와 따로: 기본 밝은 지도, 브라우저에 기억, 어두운 지도는 네이비 톤."""
+    """지도 배경은 페이지 테마와 따로: 기본 밝은 지도, 브라우저에 기억, 어두운 지도는 반전 톤."""
     assert 'id="mapcard" data-map="light"' in page  # 기본: 밝은 지도
     assert '<button type="button" data-map="light" aria-pressed="true">밝은 지도</button>' in page
     assert '<button type="button" data-map="dark" aria-pressed="false">어두운 지도</button>' in page
     assert 'const MAP_KEY = "stepmap-map"' in page
     light = page.split('.mapcard[data-map="light"] {', 1)[1].split("}", 1)[0]
-    assert "--map-bg: #EEF2F7" in light and "--map-text: #0F1A2E" in light
-    assert "--m-ring: #0B1220" in light and "--m-warn: #A35F00" in light  # 진한 네이비 테두리, 진한 호박색
+    assert "--map-bg: #ECECEC" in light and "--map-grid: #FFFFFF" in light and "--map-park: #CDEBDD" in light
+    assert "--m-ring: #FFFFFF" in light and "--m-warn: #F7B558" in light  # 흰 테두리, 새 등급 색
     assert "var(--m-${e.level})" in page and "var(--m-ring)" in page  # 마커는 지도 배경별 색을 쓴다
 
 
@@ -78,8 +76,7 @@ def test_home_no_route_drawn_and_session(page):
     assert "L.latLngBounds(DATA.events.length ? DATA.events.map((e) => [e.lat, e.lon]) : DATA.trajectory)" in page
     assert "map.fitBounds(bounds.pad(0.35))" in page
     assert "const pts = DATA.events.length ? DATA.events.map((e) => [e.x, e.y]) : DATA.trajectory_xy;" in page
-    assert '$("s-session").setAttribute("title", DATA.session || "")' in page
-    assert ".session dd#s-session { overflow: hidden; white-space: nowrap; text-overflow: ellipsis;" in page
+    assert 'id="tb-date"' in page  # 위쪽 바 오른쪽: 마지막 점검 날짜
     assert "@media (min-width: 1260px) and (min-height: 700px)" in page  # 데스크톱: 지도 = 남은 높이
 
 
@@ -93,7 +90,7 @@ def test_level_filter_buttons_and_counts(page):
     assert [(lv, name, int(n)) for lv, _, name, n in level_buttons(page)] == [
         ("danger", "위험", 4), ("warn", "주의", 5), ("ok", "정상", 31)]
     assert '<div class="lv-filter" id="lv-filter" role="group" aria-label="판정별 지점 보기">' in page
-    for lv, color in (("danger", "#F25F5C"), ("warn", "#F5B841"), ("ok", "#2BB673")):
+    for lv, color in (("danger", "#EF6461"), ("warn", "#F7B558"), ("ok", "#A5D48C")):
         assert f"--{lv}: {color}" in page
     # 셋 다 끄면 안내, 클러스터·목록은 보이는 지점만, 브라우저 저장소는 쓰지 않는다
     assert '<div class="map-empty" id="map-empty" role="status" hidden>표시할 지점이 없어요</div>' in page
@@ -113,9 +110,10 @@ def test_plane_fallback_embedded(built, page):
     data = embedded(page)
     assert len(data["trajectory_xy"]) == len(data["trajectory"])
     assert all("x" in e and "y" in e for e in data["events"])
-    # 타일 실패·대체 이미지·Leaflet 미로딩 모두 평면 지도로 전환
-    for reason in ('fallback("tileerror")', 'fallback("placeholder")', 'fallback("leaflet")', 'fallback("timeout")'):
-        assert reason in page
+    # 타일 실패·대체 이미지·응답 없음은 다음 제공처, 마지막 제공처도 안 되면 평면 지도. Leaflet 미로딩은 바로 평면
+    for reason in ('next("tileerror", at)', '"placeholder"', 'next("timeout", at)', 'fallback("leaflet")',
+                   "attachTiles(map, 19, () => gen === state.gen && state.mode === \"tiles\", (reason) => fallback(reason));"):
+        assert reason in page, reason
 
 
 def test_marker_shapes_and_level_colors(page):
@@ -140,32 +138,53 @@ def test_missing_latlon_raises(tmp_path):
 
 
 def test_screen_sections(page):
-    for sid in ("nav", "s-session", "s-time", "s-area", "s-robot", "theme-toggle",
-                "page-home", "page-visual", "page-physical", "page-history",
+    for sid in ("nav", "tb-date", "theme-toggle",
+                "page-home", "page-detail", "page-history",
                 "k-dist", "k-visual", "k-loose", "k-ok", "map", "plane", "retry", "legend", "dpanel"):
         assert f'id="{sid}"' in page, sid
     assert "지도 다시 불러오기" in page
     assert "휠체어 회피 기준" in page
 
 
-def test_four_pages_with_hash_links(page):
-    # 사이드바 링크 4개 (설정 메뉴 없음), 처음엔 종합 현황만 보인다
-    assert re.findall(r'<a href="#(\w+)" data-page="\w+">', page) == ["home", "visual", "physical", "history"]
-    for title in ("종합 현황", "외관 검사", "물리적 안정성 검사", "점검 이력"):
-        assert f">{title}<" in page
+def test_three_pages_with_hash_links(page):
+    """메뉴 3개: 종합 현황 / 검사 결과 / 점검 이력. 처음엔 종합 현황만 보인다."""
+    assert re.findall(r'<a href="#(\w+)" data-page="\w+">', page) == ["home", "detail", "history"]
+    nav = re.search(r'<nav class="nav".*?</nav>', page, re.S).group(0)
+    assert re.findall(r'<span class="full">([^<]+)</span>', nav) == ["종합 현황", "검사 결과", "점검 이력"]
+    assert "설정" not in nav
     assert '<section class="page" id="page-home" data-page="home"' in page
-    for p in ("visual", "physical", "history"):
+    for p in ("detail", "history"):
         assert re.search(rf'<section class="page" id="page-{p}"[^>]*hidden>', page), p
-    assert "다음 단계에서 구성" not in page  # 네 페이지 모두 구성됨
+    assert 'id="page-visual"' not in page and 'id="page-physical"' not in page
     assert 'addEventListener("hashchange", route)' in page  # 뒤로 가기
-    assert "설정" not in re.search(r'<nav class="nav".*?</nav>', page, re.S).group(0)
+    # 위쪽 가운데 떠 있는 pill 메뉴, 1259px 이하는 화면 아래 고정 탭바
+    assert '<header class="topbar">' in page and 'class="side"' not in page
+    tab = page.split("/* 1259px 이하: 메뉴는 화면 아래 고정 탭바 */", 1)[1].split("}\n  }", 1)[0]
+    assert "@media (max-width: 1259px)" in tab and ".nav { position: fixed; left: 0; right: 0; bottom: 0;" in tab
+
+
+def test_old_menu_names_not_on_screen(built, page, tmp_path):
+    """옛 메뉴 이름("외관 검사", "물리적 안정성 검사")은 대시보드·신고서 어디에도 없다."""
+    from stepmap.report import write_report
+    rep_html, rep_csv, _ = write_report(built / "events.csv", built / "trajectory.csv", tmp_path / "report.html")
+    for doc in (page, rep_html.read_text(encoding="utf-8"), rep_csv.read_text(encoding="utf-8-sig")):
+        for old in ("외관 검사", "물리적 안정성", "외관·물리적"):
+            assert old not in doc, old
+
+
+def test_old_routes_open_detail(page):
+    """예전 주소 #visual/<id>, #physical/<id>는 #detail/<id>로 바꿔 연다 (없는 id면 #detail)."""
+    assert 'if (rawPage === "visual" || rawPage === "physical") {' in page
+    assert 'location.replace(rawId && byId[rawId] ? `#detail/${rawId}` : "#detail");' in page
+    assert "const detailHref = (e) => `#detail/${e.id}`;" in page
+    # 선택 없이 들어오면 목록 첫 지점
+    assert "const first = detailShown()[0] || detailAll[0];" in page and "location.replace(`#detail/${first.id}`)" in page
 
 
 def test_click_rule_and_theme_default(page):
-    # 흔들림은 물리적 안정성, 나머지는 외관 검사 (종합 현황 상세 패널의 "자세히 보기")
-    assert 'const pageFor = (e) => (e.kind === "loose" ? "physical" : "visual");' in page
-    assert "const detailHref = (e) => `#${pageFor(e)}/${e.id}`;" in page
-    assert '<html lang="ko" data-theme="dark">' in page and ':root[data-theme="light"]' in page
+    # 지점 상세는 모두 검사 결과 (종합 현황 상세 패널의 "자세히 보기", 점검 이력 지점 목록)
+    assert "pageFor" not in page
+    assert '<html lang="ko" data-theme="light">' in page and ':root[data-theme="dark"]' in page  # 라이트 기본
     assert "stroke-dasharray:3.4 2.4" in page  # 흔들림 마커 점선 고리
 
 
@@ -214,18 +233,57 @@ def test_card_distance_is_path_length_rounded_once(built, page):
     assert card == math.floor(exact + 0.5) == 912
 
 
-def test_visual_page_structure(page):
-    for sid in ("v-crumb", "v-tabs", "v-ok", "v-list", "v-detail"):
+def test_detail_page_structure(page):
+    """검사 결과: 요약 한 줄 + 왼쪽 목록(탭·판정 칩) + 오른쪽 상세 + 위치 지도. 처음 칩은 위험·주의만 켜짐."""
+    for sid in ("d-summary", "d-tabs", "d-levels", "d-list", "d-detail", "d-map", "d-plane"):
         assert f'id="{sid}"' in page, sid
-    assert '<a href="#home">종합 현황 지도</a> ›' in page
-    # 대상: 흔들림 제외, 정렬은 종합 현황 목록과 같은 순서
-    assert 'DATA.events.filter((e) => e.kind !== "loose").sort(byIssueOrder)' in page
-    assert "b.ratio - a.ratio" in page
+    chips = re.findall(r'<button type="button" class="lv-btn" data-level="(\w+)" aria-pressed="(\w+)">'
+                       r'<span class="dot" aria-hidden="true"></span>(\S+) <span class="n" id="d-n-\w+"></span></button>', page)
+    assert chips == [("danger", "true", "위험"), ("warn", "true", "주의"), ("ok", "false", "정상")]
+    assert 'const D_TABS = [["all", "전체"], ["surface", "노면 형상"], ["loose", "흔들림"]];' in page
+    assert ".d-grid { display: grid; grid-template-columns: 360px minmax(0, 1fr);" in page
+    assert "@media (max-width: 1259px) { .d-grid { grid-template-columns: minmax(0, 1fr); } }" in page
+    # 정렬: 위험→주의→정상, 같은 판정은 ratio 큰 순
+    assert "const detailAll = [...DATA.events].sort(byIssueOrder);" in page and "b.ratio - a.ratio" in page
+    assert '밟은 블록 ${DATA.stepped_blocks.toLocaleString("ko-KR")}개 확인' in page  # 천 단위 쉼표
     for text in ("깊이 카메라 바닥 평면 대비 높이 차", "발 접지 높이 차", "깊이 카메라 바닥 평면 기울기",
-                 "RGB 영상 균열 검출 점수", "신고서에 포함됨", "사진 없음", "지도에서 위치 보기", "두 측정 차이"):
+                 "RGB 영상 균열 검출 점수", "신고서에 포함됨", "사진 없음", "지도에서 위치 보기", "두 측정 차이",
+                 "밟은 횟수", "추가 침하", "주변 노면 형상 비교", "측정 방식"):
         assert text in page, text
-    assert 'if (e.kind !== "crack") crit.append' in page  # 균열은 배수 표시 안 함
+    assert 'const ratioText = (e) => (e.kind === "crack" ? ""' in page  # 균열은 배수 표시 안 함
+    assert "row(\"위도·경도\", `${Number(e.lat).toFixed(6)}, ${Number(e.lon).toFixed(6)}`);" in page
     assert "location.hash = `#home/${e.id}`" in page
+
+
+def test_detail_tab_counts_sum_to_all(page):
+    """탭별 개수: 노면 형상 + 흔들림 = 전체 (판정 칩이 어떻든). 탭 개수는 목록과 같은 함수로 센다."""
+    data = embedded(page)
+    assert "b.append(el(\"span\", null, label), el(\"span\", \"n\", String(detailShown(k).length)));" in page
+    assert 'const inTab = (e, tab) => tab === "all" || (tab === "loose") === (e.kind === "loose");' in page
+    levels = ("danger", "warn", "ok")
+    for mask in range(8):
+        on = {lv for i, lv in enumerate(levels) if mask >> i & 1}
+        shown = [e for e in data["events"] if e["level"] in on]
+        surface = sum(e["kind"] != "loose" for e in shown)
+        loose = sum(e["kind"] == "loose" for e in shown)
+        assert surface + loose == len(shown)
+    # 처음 칩(위험·주의): 전체 9 = 노면 형상 7 + 흔들림 2
+    first = [e for e in data["events"] if e["level"] in ("danger", "warn")]
+    assert (len(first), sum(e["kind"] != "loose" for e in first), sum(e["kind"] == "loose" for e in first)) == (9, 7, 2)
+
+
+def test_loose_detail_has_graph_and_confirmation(built, page):
+    """흔들림 상세: 발끝 높이 그래프 + 밟은 횟수 + 추가 침하 + 확정/의심. 목록 행은 ◆ 아이콘과 배지."""
+    data = embedded(page)
+    card = page.split("function renderDetailCard() {", 1)[1].split("\n  }\n", 1)[0]
+    loose_part = card.split("if (loose) {  // 흔들림", 1)[1].split("\n    }\n", 1)[0]
+    assert "footGraph(e)" in loose_part and "밟은 횟수" in loose_part and "추가 침하" in loose_part
+    assert 'el("span", `dia lv-c-${e.level}`, "◆")' in page
+    ev = {e["id"]: e for e in data["events"]}
+    assert ev["ev_0014"]["trace"] is not None and len(ev["ev_0014"]["steps"]) == 2 and ev["ev_0014"]["confirm"] == "확정"
+    assert ev["ev_0031"]["confirm"] == "의심" and len(ev["ev_0031"]["steps"]) == 1
+    assert all(ev[i]["confirm"] is None for i in ev if ev[i]["kind"] == "loose" and ev[i]["level"] == "ok")
+    assert data["stepped_blocks"] == len(read_blocks(built / "blocks.csv"))  # 밟은 블록 = blocks.csv 행 수
 
 
 def test_spiderfy_at_max_zoom(page):
@@ -233,7 +291,7 @@ def test_spiderfy_at_max_zoom(page):
     assert "map.getZoom() >= map.getMaxZoom()" in page and "클릭 → 펼치기" in page
 
 
-def test_visual_targets_match_data(built, page):
+def test_surface_targets_match_data(built, page):
     data = embedded(page)
     visual = [e for e in data["events"] if e["kind"] != "loose"]
     assert visual and all(e["kind"] in ("step", "slope", "crack") for e in visual)
@@ -310,16 +368,11 @@ def test_home_detail_data_embedded(built, page):
 
 
 def test_home_detail_link_targets(page):
-    """"자세히 보기": 흔들림은 #physical/<id>, 나머지는 #visual/<id>."""
-    data = embedded(page)
+    """"자세히 보기"와 점검 이력 지점 목록: 모든 지점이 #detail/<id> (방문 기록에 남겨 뒤로 가기 → #history/<날짜>)."""
     panel = page.split("function renderPanel() {", 1)[1].split("\n  }\n", 1)[0]
     assert 'el("a", "btn primary", "자세히 보기")' in panel and "more.href = detailHref(e);" in panel
-
-    def href(e):  # 화면 쪽 detailHref·pageFor와 같은 규칙
-        return f"#{'physical' if e['kind'] == 'loose' else 'visual'}/{e['id']}"
-    kinds = {e["kind"]: href(e) for e in data["events"]}
-    assert kinds["loose"].startswith("#physical/")
-    assert all(kinds[k].startswith("#visual/") for k in ("step", "slope", "crack"))
+    assert "if (newest) go.href = detailHref(e);" in page  # 점검 이력 행 (링크 → hash 이동, replace 아님)
+    assert "const hOpen = (e) => { hideTip(); location.hash = detailHref(e); };" in page
 
 
 # --- 점검 이력: 날짜 ------------------------------------------------------------------------
@@ -391,7 +444,7 @@ def test_history_has_no_session_word(page):
     script = page.split("// ---------------------------------------------------------------- 점검 이력", 1)[1].split("function route()", 1)[0]
     strings = re.findall(r'"[^"\n]*"|`[^`]*`', script)
     assert not [t for t in strings if "세션" in t]
-    assert '.app:has(#page-history:not([hidden])) .session dl > :nth-child(-n+4) { display: none; }' in page
+    assert 'class="session"' not in page and "측정 세션" not in page  # 사이드바 세션 칸 없음 (위쪽 바에는 날짜만)
 
 
 # --- 점검 이력: 지도·막대·지점 목록 ---------------------------------------------------------------
@@ -440,3 +493,100 @@ def test_history_point_rows_match_day_events(built, page):
     assert "showOk: false" in page  # 처음엔 접힘
     assert '{ key: "level",  label: "판정",      cmp: byIssueOrder }' in page
     assert "const byIssueOrder = (a, b) => LEVEL[b.level].rank - LEVEL[a.level].rank || b.ratio - a.ratio || a.t - b.t;" in page
+
+
+# --- 종합 현황 지도: 마커 모양 ----------------------------------------------------------------
+
+def test_home_marker_shapes_by_kind(page):
+    """종합 현황 지도: 흔들림은 마름모(ev-diamond, 흰 발 아이콘), 나머지(노면 형상)는 원(ev-circle). 지도·펼친 지점·평면 지도 모두."""
+    script = page.split("<script>", 1)[1]
+    assert 'const homeShape = (e) => (e.kind === "loose" ? "diamond" : "circle");' in script
+    assert 'class="mk-diamond"' in script and 'transform="rotate(45 12 12)"' in script and 'class="mk-circle"' in script
+    assert "fill:#FFFFFF" in script.split("const PAW =", 1)[1].split(";", 1)[0]  # 흰 발 아이콘
+    home = script.split("function leafletMarkers() {", 1)[1].split("function fallback(reason) {", 1)[0]
+    plane = script.split("function startPlane() {", 1)[1].split("function renderMap() {", 1)[0]
+    assert home.count("className: `ev-marker ev-${homeShape(") == 2  # 한 지점 + 펼친 지점
+    assert 'node.setAttribute("class", `ev ev-${homeShape(e)}`);' in plane
+    assert "markerInner(" not in home.replace("homeMarkerInner(", "") and "markerInner(" not in plane.replace("homeMarkerInner(", "")
+    data = embedded(page)
+    shapes = {e["id"]: ("diamond" if e["kind"] == "loose" else "circle") for e in data["events"]}
+    assert sum(v == "diamond" for v in shapes.values()) == 8 and sum(v == "circle" for v in shapes.values()) == 32
+    # 묶음은 원, 흔들림이 있으면 오른쪽 위 작은 마름모 배지
+    assert 'class="mk-cluster"' in script and 'class="mk-badge"' in script
+    assert 'const loose = members.filter((e) => e.kind === "loose");' in script
+
+
+def test_home_shape_legend_in_html(page):
+    """필터 버튼 옆 회색 모양 범례: ● 노면 형상  ◆ 흔들림 (판정 색을 쓰지 않는다)."""
+    legend = page.split('<div class="legend" id="legend"', 1)[1].split("</div>\n        </div>", 1)[0]
+    assert '<div class="shape-legend" id="shape-legend" role="group" aria-label="마커 모양">' in legend
+    assert re.findall(r'<span class="item"><svg class="shp"[^>]*>(?:<circle|<rect)[^<]*</svg>([^<]+)</span>', legend) == ["노면 형상", "흔들림"]
+    assert legend.index('id="lv-filter"') < legend.index('id="shape-legend"')
+    assert ".shape-legend .shp { width: 14px; height: 14px; flex: none; fill: var(--muted); }" in page
+    assert "흔들림 (점선 고리)" not in page
+
+
+
+# --- 색감·글꼴·지도 타일 ------------------------------------------------------------------------
+
+def _lum(h):
+    c = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    c = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+
+def _contrast(a, b):
+    la, lb = sorted((_lum(a), _lum(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def _mix(a, b, t):
+    pa, pb = [int(a[i:i + 2], 16) for i in (1, 3, 5)], [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x * t + y * (1 - t)):02X}" for x, y in zip(pa, pb))
+
+
+def _tokens(block):
+    return dict(re.findall(r"--([\w-]+): (#[0-9A-Fa-f]{6})", block))
+
+
+def test_grade_colors_and_ink_contrast(page):
+    """등급 색(위험·주의·정상)과 글자용 진한 변형: 흰 카드·배경·배지 바탕(20%) 모두 4.5:1 이상 (라이트·다크)."""
+    light = _tokens(page.split(":root {", 1)[1].split("}", 1)[0])
+    dark = {**light, **_tokens(page.split(':root[data-theme="dark"] {', 1)[1].split("}", 1)[0])}
+    assert (light["danger"], light["warn"], light["ok"]) == ("#EF6461", "#F7B558", "#A5D48C")
+    assert (light["bg"], light["surface"], light["text"], light["muted"], light["border"], light["accent"]) == (
+        "#EDEDED", "#FFFFFF", "#363236", "#75707A", "#E4E2E6", "#363236")
+    assert (dark["bg"], dark["surface"], dark["text"]) == ("#1F1C1F", "#2A262A", "#F2F0F2")
+    for t in (light, dark):
+        for lv in ("danger", "warn", "ok"):
+            for bg in (t["surface"], t["bg"], _mix(t[lv], t["surface"], 0.2)):
+                assert _contrast(t[f"{lv}-ink"], bg) >= 4.5, (lv, t[f"{lv}-ink"], bg)
+            assert _contrast(t["on-grade"], t[lv]) >= 4.5  # 등급 색 바탕 위 글자 (막대 그래프)
+        assert _contrast(t["text"], t["surface"]) >= 4.5 and _contrast(t["text"], t["bg"]) >= 4.5
+        assert _contrast(t["muted"], t["surface"]) >= 4.5 and _contrast(t["muted-strong"], t["bg"]) >= 4.5
+        assert _contrast(t["muted"], t["surface-2"]) >= 4.5
+        assert _contrast(t["on-accent"], t["accent"]) >= 4.5  # 선택된 메뉴·탭·칩·날짜
+    assert "background: color-mix(in srgb, var(--c) 20%, var(--surface)); color: var(--ink);" in page  # 배지: 옅은 바탕 + 진한 글자
+
+
+def test_fonts_inter_tight_then_pretendard(page):
+    """영문·숫자 Inter Tight(400/500/600), 한글 Pretendard, 없으면 시스템 글꼴. KPI 큰 숫자는 500, 자간 -0.02em."""
+    assert '--font: "Inter Tight", "Pretendard Variable", Pretendard, system-ui,' in page
+    assert 'href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&display=swap"' in page
+    assert "pretendardvariable-dynamic-subset.css" in page
+    assert ".kpi .value { grid-column: 2; font-size: 30px; font-weight: 500; line-height: 1.1; letter-spacing: -0.02em;" in page
+    assert ".kpi .value small { font-size: 14px; font-weight: 500; color: var(--muted);" in page
+    css = page.split("<style>", 1)[1].split("</style>", 1)[0]
+    assert not re.search(r"font-weight: (6[5-9]0|[7-9]\d\d)", css)  # 받은 굵기(600)보다 굵게 그리지 않는다
+
+
+def test_tile_providers_and_attribution(page):
+    """밝은 지도: CARTO light_all (© OpenStreetMap contributors © CARTO) → 못 받으면 OpenTopoMap + 회색 필터 → 평면 지도."""
+    assert "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png" in page
+    assert ('&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors '
+            '&copy; <a href="https://carto.com/attributions">CARTO</a>') in page
+    assert "OpenStreetMap</a> contributors, SRTM" in page and "OpenTopoMap</a>" in page and "CC-BY-SA" in page
+    tiles = page.split("const TILES = [", 1)[1].split("];", 1)[0]
+    assert tiles.index('name: "carto"') < tiles.index('name: "topo"')
+    assert ':root[data-tiles="topo"] .mapcard[data-map="light"] { --tile-filter: grayscale(1)' in page
+    assert len(re.findall(r"attachTiles\(map, \d+,", page)) == 3  # 종합 현황·점검 이력·검사 결과 위치 지도 모두 같은 차례

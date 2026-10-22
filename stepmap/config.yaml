@@ -37,5 +37,7 @@ merge:                               # stepmap merge (계획서 9.3). 거리는 
   step_window_s: 10                  # 〃 시간 차 (카메라가 먼저 보고 발이 나중에 밟는다)
   dedup_radius_m: 1.0                # 같은 종류(균열·경사)가 여러 번 잡히면 confidence 최고 하나만
   dedup_window_s: 10
+block:                               # 밟은 블록 요약 (blocks.csv)
+  size_m: 0.3                        # 로컬 x·y를 이 크기 격자로 나눠 같은 칸이면 같은 블록 (보도블록 한 장 크기)
 report:
   area: 제주시 노형동·연동            # 신고서 요약의 '구간'

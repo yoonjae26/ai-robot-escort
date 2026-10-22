@@ -1,18 +1,19 @@
 """HTML 대시보드 생성 (계획서 8장).
 
 하나의 HTML 안에서 왼쪽 사이드바로 4페이지를 전환한다
-(주소 해시: #home/<id>, #visual/<id>, #physical/<id>, #history/<YYYY-MM-DD>).
+(주소 해시: #home/<id>, #detail/<id>, #history/<YYYY-MM-DD>. 예전 #visual/<id>, #physical/<id>는 #detail/<id>로 연다).
 - 종합 현황: KPI 4개, 큰 지도(판정 색 + 종류 모양, 흔들림은 점선 고리), 판정 필터, 지도 옆 지점 상세 패널
-- 외관 검사: 흔들림을 뺀 지점(단차·경사·균열) 목록 + 상세 (사진, 값, 기준, 교차 측정, 측정 근거)
-- 물리적 안정성 검사: 흔들림 지점 목록 + 상세 (사진, 발끝 높이 그래프, 추가 침하, 측정 근거, 외관 검사 비교)
+- 검사 결과: 요약 한 줄(위험·주의·밟은 블록 수) + 지점 목록(탭: 전체/노면 형상/흔들림, 판정 칩) + 상세
+  (공통: 사진·측정값·근거·위치·시각·방식, 노면 형상: 교차 측정, 흔들림: 발끝 높이 그래프·밟은 횟수·확정/의심) + 위치 지도
 - 점검 이력: 점검 날짜 고르기(칩 + 달력), 그날의 KPI 4개(점검 거리·위험·주의·정상), 그날 지도(이동경로 + 100 m 눈금 +
   출발·도착 + 마커, 경로 켜고 끄기) + 종류별 판정 누적 막대, 지점 표(필터·정렬·이동, 정상은 접어 둠),
   현재 필터 결과 CSV 다운로드(events.csv와 같은 열·형식, BOM),
   같은 폴더의 report.html 열기. 지난 날짜는 events.csv 폴더의 history/<YYYY-MM-DD>/에서 읽는다
 - 지도: 최대 확대에서도 묶인 마커는 누르면 부채꼴로 펼친다
-- 사이드바 아래: 측정 세션 정보 (세션, 측정 시간, 구간, 로봇). 네이비 테마, 다크 기본, 라이트 전환 가능
-- 배경: Leaflet + OpenTopoMap 타일을 회색조로 표시. 지도 배경은 페이지 테마와 따로 고른다
-  (밝은 지도 기본: 옅은 회청색 / 어두운 지도: 반전 네이비 톤). 판정 색이 배경 도로 색과 섞이지 않게 하기 위함이다.
+- 위쪽 가운데 떠 있는 pill 메뉴(1259px 이하는 아래 탭바), 왼쪽 위 로고, 오른쪽 위 테마 전환·마지막 점검 날짜.
+  라이트(차콜 강조) 기본, 다크(차콜 계열) 전환 가능. 글꼴: Inter Tight(영문·숫자) + Pretendard(한글)
+- 배경: Leaflet + CARTO light_all(밝은 회색) 타일, 못 받으면 OpenTopoMap + 회색 필터. 지도 배경은 페이지 테마와 따로 고른다
+  (밝은 지도 기본 / 어두운 지도: 반전 톤). 판정 색이 배경 도로 색과 섞이지 않게 하기 위함이다.
 - 타일이나 Leaflet을 불러오지 못하거나, 타일이 실제 지도가 아닌 대체 이미지(차단·워터마크)이면
   odom (x, y) 평면 SVG 지도로 자동 전환한다.
 입력은 events.csv, trajectory.csv 두 파일(가장 최근 점검)과 지난 점검 폴더이고, 데이터는 JSON으로 HTML 안에 넣는다.
@@ -26,8 +27,9 @@ import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .events import (DEFAULT_THRESHOLDS, EVENT_COLUMNS, PATH_MIN_STEP_M, _fmt, criterion_text, display_meters, exceed_ratio,
-                     extra_sink, group_foot_traces, path_length, read_events, read_foot_traces, read_trajectory)
+from .events import (BLOCK_SIZE_M, DEFAULT_THRESHOLDS, EVENT_COLUMNS, PATH_MIN_STEP_M, _fmt, block_index, count_stepped_blocks,
+                     criterion_text, display_meters, exceed_ratio, extra_sink, group_foot_traces, loose_confirmation, path_length,
+                     read_blocks, read_events, read_foot_traces, read_trajectory)
 from .photos import prepare_photos
 
 LEAFLET_VERSION = "1.9.4"
@@ -40,14 +42,22 @@ LEAFLET_JS_SRI = "sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
 FONT_CSS = "https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css"
 FONT_CSS_SRI = "sha384-uR1wgObmx89ZQ4VVXHdzjbDJZ1PvBK01K+E3GebmaBKdZ87qRJvBWPoPbzWeEd5T"
 
-# OpenTopoMap: API 키 없이 file://로 연 HTML에서도 실제 지도를 준다 (2026-10 확인).
-# - OSM 공식 타일 서버는 Referer 없는 요청에 403 "Access blocked" 이미지를 준다.
-# - CARTO basemap은 키 없는 요청에 "API KEY REQUIRED" 워터마크 이미지를 준다.
-TILE_URL = "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png"
-TILE_MAX_NATIVE_ZOOM = 17  # 그 위는 확대 표시
-TILE_ATTRIBUTION = ('&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | '
-                    '&copy; <a href="https://opentopomap.org">OpenTopoMap</a> '
-                    '(<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)')
+# 지도 타일: 밝은 회색 CARTO light_all을 먼저 쓰고, 못 받거나 대체 이미지면(키 없는 요청에 "API KEY REQUIRED"
+# 워터마크를 줄 때가 있다) OpenTopoMap + 회색 필터, 그것도 안 되면 odom 평면 지도로 바꾼다.
+# OSM 공식 타일 서버는 Referer 없는 요청(file://로 연 HTML)에 403 "Access blocked" 이미지를 주므로 쓰지 않는다.
+TILE_URL = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+TILE_SUBDOMAINS = "abcd"
+TILE_MAX_NATIVE_ZOOM = 20  # 그 위는 확대 표시
+TILE_ATTRIBUTION = ('&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors '
+                    '&copy; <a href="https://carto.com/attributions">CARTO</a>')
+TILE_FALLBACK_URL = "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png"
+TILE_FALLBACK_SUBDOMAINS = "abc"
+TILE_FALLBACK_MAX_NATIVE_ZOOM = 17
+TILE_FALLBACK_ATTRIBUTION = ('&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | '
+                             '&copy; <a href="https://opentopomap.org">OpenTopoMap</a> '
+                             '(<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)')
+# 영문·숫자 글꼴 Inter Tight (Google Fonts 400/500/600). 한글은 Pretendard, 인터넷이 없으면 시스템 글꼴
+INTER_CSS = "https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&display=swap"
 
 _EVENT_FIELDS = ["id", "t", "x", "y", "kind", "value", "unit", "source", "leg", "confidence",
                  "level", "note", "value_foot", "lat", "lon"]
@@ -62,18 +72,18 @@ HISTORY_DIR = "history"      # 지난 점검: <events.csv 폴더>/history/<YYYY-
 ROUTE_TICK_M = 100           # 점검 이력 지도: 경로를 따라 이 간격마다 누적 거리 눈금
 KST = timezone(timedelta(hours=9))
 WEEKDAYS = "월화수목금토일"
-NEAR_VISUAL_M = 1.0  # 물리적 안정성 상세의 "외관 검사 비교" 반경
+NEAR_VISUAL_M = 1.0  # 흔들림 상세의 "주변 노면 형상" 비교 반경
 
 
 def near_visual_issues(e: dict, events: list[dict], radius: float = NEAR_VISUAL_M) -> list[str]:
-    """흔들림 지점 radius m 안의 외관 이상(단차·경사·균열의 위험·주의) 지점 id, 가까운 순."""
+    """흔들림 지점 radius m 안의 노면 형상 이상(단차·경사·균열의 위험·주의) 지점 id, 가까운 순."""
     near = [(math.hypot(o["x"] - e["x"], o["y"] - e["y"]), o["id"]) for o in events
             if o["kind"] != "loose" and o["level"] != "ok"]
     return [i for d, i in sorted(near) if d <= radius + 1e-9]
 
 
 def trace_payload(trace: dict | None) -> dict | None:
-    """발끝 기록 + 추가 침하 계산 결과 (그래프와 값 상자가 쓰는 값)."""
+    """걸음 하나의 발끝 기록 + 추가 침하 계산 결과 (그래프와 값 상자가 쓰는 값)."""
     if not trace:
         return None
     r = extra_sink(trace)
@@ -85,12 +95,15 @@ def trace_payload(trace: dict | None) -> dict | None:
 
 def build_payload(events: list[dict], traj: list[dict], thresholds: dict | None = None,
                   photos: dict | None = None, meta: dict | None = None, traces: dict | None = None,
-                  report_href: str | None = None, history: list[tuple[list[dict], list[dict]]] | None = None) -> dict:
+                  report_href: str | None = None, history: list[tuple[list[dict], list[dict]]] | None = None,
+                  stepped_blocks: int | None = None, blocks: dict | None = None) -> dict:
     """photos: prepare_photos 결과 {id: {src, w, h, mark, overlay}}. 사진이 없는 지점은 photo=None.
     meta: 세션 정보 {"area": 구간, "robot": 로봇} (config.yaml의 report.area, robot.name).
     report_href: 점검 이력의 "신고서 열기" 주소 (없으면 버튼을 숨긴다).
     각 지점의 csv: events.csv에 쓰는 것과 같은 형식의 칸 문자열 (점검 이력 CSV 다운로드가 그대로 이어 붙인다).
-    history: 지난 점검 [(events, trajectory)] (점검 이력 페이지만 쓴다). 가장 최근 날짜와 같은 날은 건너뛴다."""
+    history: 지난 점검 [(events, trajectory)] (점검 이력 페이지만 쓴다). 가장 최근 날짜와 같은 날은 건너뛴다.
+    stepped_blocks: 발로 밟아 확인한 블록 수 (events.count_stepped_blocks, blocks.csv·발끝 기록이 모두 없으면 None).
+    blocks: 위치 지도에 그릴 밟은 블록 칸 (blocks_payload)."""
     _check_latlon(events, traj)
     sessions = sorted({e["session"] for e in events})
     th = thresholds or DEFAULT_THRESHOLDS
@@ -109,6 +122,8 @@ def build_payload(events: list[dict], traj: list[dict], thresholds: dict | None 
         "trajectory": [[round(p["lat"], 7), round(p["lon"], 7)] for p in traj],
         "trajectory_xy": [[round(p["x"], 2), round(p["y"], 2)] for p in traj],
         "report": report_href,
+        "stepped_blocks": stepped_blocks,
+        "blocks": blocks,
         "csv_columns": EVENT_COLUMNS,
         "events": [event_payload(e, events, th, photos, traces) for e in events],
         # 점검 날짜 (최신순). 가장 최근 날짜는 위 events를 쓰고(events: null), 지난 날짜는 그날의 지점을 넣는다.
@@ -128,14 +143,26 @@ def _check_latlon(events: list[dict], traj: list[dict]) -> None:
 
 
 def event_payload(e: dict, events: list[dict], th: dict, photos: dict | None = None, traces: dict | None = None) -> dict:
-    """지점 하나의 화면용 값. events: 같은 날 지점 전체 (흔들림의 외관 검사 비교용)."""
+    """지점 하나의 화면용 값. events: 같은 날 지점 전체 (흔들림의 주변 노면 형상 비교용)."""
     return {**{k: e[k] for k in _EVENT_FIELDS}, "session": e["session"],
             "csv": [_fmt(c, e.get(c)) for c in EVENT_COLUMNS],
             "criterion": criterion_text(e["kind"], e["level"], th),
             "ratio": round(exceed_ratio(e["kind"], e["level"], e["value"], th), 4),  # 신고서와 같은 정렬 기준
             "photo": (photos or {}).get(e["id"]),
-            **({"trace": trace_payload((traces or {}).get(e["id"])),
-                "near_visual": near_visual_issues(e, events)} if e["kind"] == "loose" else {})}
+            **(loose_payload(e, events, th, (traces or {}).get(e["id"])) if e["kind"] == "loose" else {})}
+
+
+def loose_payload(e: dict, events: list[dict], th: dict, steps: list[dict] | None) -> dict:
+    """흔들림 지점의 상세 값. trace: 그래프에 그리는 첫 걸음(지점의 다리·시각, 추가 침하 = value),
+    steps: 같은 블록을 밟은 걸음들 {leg, t_event, extra}, confirm: "확정"/"의심"/None (events.loose_confirmation).
+    발끝 기록이 없으면 지점 자체(한 걸음)로 판정한다."""
+    steps = steps or []
+    first = next((s for s in steps if s["leg"] == e["leg"]), steps[0] if steps else None)
+    extras = [extra_sink(s)["extra_mm"] for s in steps]
+    return {"trace": trace_payload(first),
+            "steps": [{"leg": s["leg"], "t_event": s["t_event"], "extra": round(x, 2)} for s, x in zip(steps, extras)],
+            "confirm": loose_confirmation(extras or [e["value"]], th),
+            "near_visual": near_visual_issues(e, events)}
 
 
 def route_payload(traj: list[dict], min_step: float = PATH_MIN_STEP_M, tick_m: float = ROUTE_TICK_M) -> dict:
@@ -165,6 +192,32 @@ def route_payload(traj: list[dict], min_step: float = PATH_MIN_STEP_M, tick_m: f
         m += tick_m
     return {"ll": [[round(p["lat"], 7), round(p["lon"], 7)] for p in pts], "xy": [[round(p["x"], 2), round(p["y"], 2)] for p in pts],
             "ticks": ticks, "total": cum[-1]}
+
+
+def blocks_payload(blocks: list[dict] | None, size: float = BLOCK_SIZE_M) -> dict | None:
+    """검사 결과 위치 지도의 밟은 블록 칸: 격자 칸 번호 ij와 크기, 칸 모서리(odom x·y)를 위도·경도로 바꾸는 식.
+    geo: lat = a0 + a1·x + a2·y, lon = b0 + b1·x + b2·y — blocks.csv의 칸 가운데(x, y, lat, lon)에 최소제곱으로 맞춘다
+    (출발점 기준 평면 근사라 1~2 km 안에서는 1차식으로 충분). 위도·경도가 없으면 geo 없이 평면 지도에만 그린다."""
+    if not blocks:
+        return None
+    pts = [b for b in blocks if b["lat"] is not None]
+    return {"size": size, "ij": [list(block_index(b["x"], b["y"], size)) for b in blocks],
+            "geo": _fit_affine(pts, "lat") + _fit_affine(pts, "lon") if len(pts) >= 3 else None}
+
+
+def _fit_affine(pts: list[dict], key: str) -> list[float]:
+    """key ≈ c0 + c1·x + c2·y 최소제곱 (정규방정식 3×3, 크라머 공식). x·y는 평균을 빼서 수치 오차를 줄인다."""
+    mx, my = sum(p["x"] for p in pts) / len(pts), sum(p["y"] for p in pts) / len(pts)
+    rows = [(1.0, p["x"] - mx, p["y"] - my, p[key]) for p in pts]
+    a = [[sum(r[i] * r[j] for r in rows) for j in range(3)] for i in range(3)]
+    v = [sum(r[i] * r[3] for r in rows) for i in range(3)]
+
+    def det(m):
+        return (m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]))
+    d = det(a)
+    c = [det([[v[r] if col == k else a[r][col] for col in range(3)] for r in range(3)]) / d for k in range(3)]
+    return [c[0] - c[1] * mx - c[2] * my, c[1], c[2]]
 
 
 def run_date(events: list[dict], traj: list[dict]) -> str | None:
@@ -214,8 +267,9 @@ def level_filter_html(events: list[dict]) -> str:
 
 def build_html(events: list[dict], traj: list[dict], thresholds: dict | None = None,
                photos: dict | None = None, meta: dict | None = None, traces: dict | None = None,
-               report_href: str | None = None, history: list[tuple[list[dict], list[dict]]] | None = None) -> str:
-    payload = build_payload(events, traj, thresholds, photos, meta, traces, report_href, history)
+               report_href: str | None = None, history: list[tuple[list[dict], list[dict]]] | None = None,
+               stepped_blocks: int | None = None, blocks: dict | None = None) -> str:
+    payload = build_payload(events, traj, thresholds, photos, meta, traces, report_href, history, stepped_blocks, blocks)
     data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     title = html.escape(f"StepMap · {payload['session']}" if payload["session"] else "StepMap")
     return (_TEMPLATE
@@ -226,7 +280,13 @@ def build_html(events: list[dict], traj: list[dict], thresholds: dict | None = N
             .replace("__FONT_CSS_SRI__", FONT_CSS_SRI)
             .replace("__LEAFLET_JS__", LEAFLET_JS)
             .replace("__LEAFLET_JS_SRI__", LEAFLET_JS_SRI)
+            .replace("__INTER_CSS__", INTER_CSS)
+            .replace("__TILE_FALLBACK_URL__", TILE_FALLBACK_URL)
+            .replace("__TILE_FALLBACK_SUBDOMAINS__", TILE_FALLBACK_SUBDOMAINS)
+            .replace("__TILE_FALLBACK_MAX_NATIVE_ZOOM__", str(TILE_FALLBACK_MAX_NATIVE_ZOOM))
+            .replace("__TILE_FALLBACK_ATTRIBUTION__", TILE_FALLBACK_ATTRIBUTION)
             .replace("__TILE_URL__", TILE_URL)
+            .replace("__TILE_SUBDOMAINS__", TILE_SUBDOMAINS)
             .replace("__TILE_MAX_NATIVE_ZOOM__", str(TILE_MAX_NATIVE_ZOOM))
             .replace("__TILE_ATTRIBUTION__", TILE_ATTRIBUTION)
             .replace("__LEVEL_FILTER__", level_filter_html(events))
@@ -236,9 +296,12 @@ def build_html(events: list[dict], traj: list[dict], thresholds: dict | None = N
 
 def write_dashboard(events_path: str | Path, traj_path: str | Path, out_path: str | Path,
                     thresholds: dict | None = None, meta: dict | None = None,
-                    traces_path: str | Path | None = None, history_dir: str | Path | None = None) -> Path:
+                    traces_path: str | Path | None = None, history_dir: str | Path | None = None,
+                    blocks_path: str | Path | None = None, block_size: float = BLOCK_SIZE_M) -> Path:
     """traces_path: 발끝 기록 (기본: events.csv와 같은 폴더의 foot_traces.csv). 없으면 그래프 자리에 "발끝 기록 없음".
     history_dir: 지난 점검 폴더 (기본: events.csv와 같은 폴더의 history/). 없으면 점검 이력에 가장 최근 날짜만.
+    blocks_path: 밟은 블록 요약 (기본: events.csv와 같은 폴더의 blocks.csv). 없으면 밟은 블록 수는 발끝 기록 기준.
+    block_size: blocks.csv를 만든 격자 크기 (config.yaml block.size_m).
     같은 폴더에 report.html이 있으면 점검 이력에 "신고서 열기" 버튼을 넣는다 (file://로 연 HTML은 옆 파일이
     있는지 브라우저가 확인할 수 없어서 만들 때 확인한다. 신고서를 나중에 만들었다면 map을 다시 실행)."""
     events = read_events(events_path)
@@ -246,106 +309,123 @@ def write_dashboard(events_path: str | Path, traj_path: str | Path, out_path: st
     out.parent.mkdir(parents=True, exist_ok=True)
     photos = prepare_photos(events, Path(events_path).parent, out.parent)  # 사본: <HTML 폴더>/photos/
     traces_path = Path(traces_path) if traces_path else Path(events_path).parent / "foot_traces.csv"
-    traces = group_foot_traces(read_foot_traces(traces_path)) if traces_path.is_file() else {}
+    trace_rows = read_foot_traces(traces_path) if traces_path.is_file() else []
+    traces = group_foot_traces(trace_rows)
     report_href = REPORT_NAME if (out.parent / REPORT_NAME).is_file() else None
     history = read_history(history_dir if history_dir else Path(events_path).parent / HISTORY_DIR)
-    page = build_html(events, read_trajectory(traj_path), thresholds, photos, meta, traces, report_href, history)
+    blocks_path = Path(blocks_path) if blocks_path else Path(events_path).parent / "blocks.csv"
+    blocks = read_blocks(blocks_path) if blocks_path.is_file() else None
+    stepped = count_stepped_blocks(blocks, trace_rows) if blocks is not None or trace_rows else None
+    page = build_html(events, read_trajectory(traj_path), thresholds, photos, meta, traces, report_href, history,
+                      stepped, blocks_payload(blocks, block_size))
     out.write_text(page, encoding="utf-8")
     return out
 
 
 _TEMPLATE = r"""<!doctype html>
-<html lang="ko" data-theme="dark">
+<html lang="ko" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__</title>
 <script>
-  // 다크 테마 기본, 사용자가 고른 테마는 브라우저에 기억 (저장소를 못 쓰면 다크)
-  try { if (localStorage.getItem("stepmap-theme") === "light") document.documentElement.dataset.theme = "light"; } catch (e) {}
+  // 라이트 테마 기본, 사용자가 고른 테마는 브라우저에 기억 (저장소를 못 쓰면 라이트)
+  try { if (localStorage.getItem("stepmap-theme") === "dark") document.documentElement.dataset.theme = "dark"; } catch (e) {}
 </script>
 <link rel="stylesheet" href="__LEAFLET_CSS__" integrity="__LEAFLET_CSS_SRI__" crossorigin="">
 <link rel="stylesheet" href="__FONT_CSS__" integrity="__FONT_CSS_SRI__" crossorigin="anonymous" media="print" onload="this.media='all'">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="__INTER_CSS__" media="print" onload="this.media='all'">
 <style>
-  /* ---------- 색 토큰: 네이비 다크 (기본) ---------- */
+  /* ---------- 색 토큰: 라이트 (기본) ----------
+     브랜드·선택 = 차콜 #363236 (선택된 메뉴·주 버튼·탭·칩·날짜: 차콜 배경 + 흰 글자).
+     등급 색(--danger·--warn·--ok)은 마커·배지 바탕·그래프·KPI 아이콘에만 쓰고, 글자에는 진한 변형(--*-ink)을 쓴다.
+     -ink는 흰 카드·배경(#EDEDED)·배지 바탕(등급 색 20%) 모두에서 4.5:1 이상. 등급 색 바탕 위 글자는 --on-grade */
   :root {
-    color-scheme: dark;
-    --font: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, "Apple SD Gothic Neo",
+    color-scheme: light;
+    --font: "Inter Tight", "Pretendard Variable", Pretendard, system-ui, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
             "Malgun Gothic", "Noto Sans KR", sans-serif;
-    --bg: #0B1220; --side-bg: #0E1629; --surface: #131C31; --surface-2: #1A2540;
-    --border: #23304D; --border-hi: #3B5BDB; --head-bg: rgb(11 18 32 / 0.78);
-    --text: #E7ECF5; --muted: #93A1BC; --accent: #4F8BFF; --on-accent: #0B1220; --focus: #4F8BFF;
-    --grid: #1C2742;
-    --danger: #F25F5C; --warn: #F5B841; --ok: #2BB673;
-    --danger-ink: #FF8E8B; --warn-ink: #F7C766; --ok-ink: #4ED39B;
-    --shadow: 0 1px 2px rgb(0 0 0 / 0.22), 0 8px 24px rgb(0 0 0 / 0.18);
-    --shadow-pop: 0 2px 4px rgb(0 0 0 / 0.3), 0 10px 28px rgb(0 0 0 / 0.38);
-    --band: #2C3A5A; --mean: #C9D2E3; --step: #FF6B68;
+    --bg: #EDEDED; --surface: #FFFFFF; --surface-2: #F9F8FA;
+    --border: #E4E2E6; --border-hi: #363236; --head-bg: rgb(237 237 237 / 0.86);
+    --text: #363236; --muted: #75707A; --muted-strong: #68636C;  /* muted-strong: 배경(#EDEDED) 위 보조 글자 */
+    --accent: #363236; --on-accent: #FFFFFF; --focus: #363236;
+    --grid: #E4E2E6;
+    --danger: #EF6461; --warn: #F7B558; --ok: #A5D48C;
+    --danger-ink: #B4232A; --warn-ink: #935600; --ok-ink: #367324; --on-grade: #1F1C1F;
+    --shadow: 0 1px 2px rgb(54 50 54 / 0.06), 0 8px 24px rgb(54 50 54 / 0.06);
+    --shadow-pop: 0 2px 6px rgb(54 50 54 / 0.12), 0 12px 32px rgb(54 50 54 / 0.16);
+    --band: #E4E2E6; --mean: #75707A; --step: #EF6461;
+    --radius: 18px; --topbar-h: 72px;
     --fs-title: 24px; --fs-h2: 16px; --fs-body: 14px; --fs-small: 12.5px; --fs-xs: 11.5px;
   }
-  /* ---------- 라이트: 네이비 강조 ---------- */
-  :root[data-theme="light"] {
-    color-scheme: light;
-    --bg: #F5F7FB; --side-bg: #EDF1F8; --surface: #FFFFFF; --surface-2: #F1F4FA;
-    --border: #DCE3EF; --border-hi: #2350C8; --head-bg: rgb(245 247 251 / 0.8);
-    --text: #0F1A2E; --muted: #4D5B76; --accent: #2350C8; --on-accent: #FFFFFF; --focus: #2350C8;
-    --grid: #E3E8F2;
-    --danger-ink: #B42318; --warn-ink: #8A5300; --ok-ink: #066633;
-    --shadow: 0 1px 2px rgb(15 26 46 / 0.06), 0 8px 24px rgb(15 26 46 / 0.06);
-    --shadow-pop: 0 2px 4px rgb(15 26 46 / 0.12), 0 10px 28px rgb(15 26 46 / 0.2);
-    --band: #D6DEEB; --mean: #66748F; --step: #E2433F;
+  /* ---------- 다크: 차콜 계열 ---------- */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #1F1C1F; --surface: #2A262A; --surface-2: #332E33;
+    --border: #3D383D; --border-hi: #F2F0F2; --head-bg: rgb(31 28 31 / 0.86);
+    --text: #F2F0F2; --muted: #ADA7B0; --muted-strong: #ADA7B0;
+    --accent: #F2F0F2; --on-accent: #1F1C1F; --focus: #F2F0F2;
+    --grid: #3D383D;
+    --danger-ink: #F58A86; --warn-ink: #F7B558; --ok-ink: #A5D48C;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.24);
+    --shadow-pop: 0 2px 6px rgb(0 0 0 / 0.36), 0 12px 32px rgb(0 0 0 / 0.42);
+    --band: #3D383D; --mean: #D9D5DA; --step: #F58A86;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; background: var(--bg); color: var(--text); font: var(--fs-body)/1.55 var(--font);
                -webkit-font-smoothing: antialiased; }
   button { font: inherit; color: inherit; }
   :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-  h1 { font-size: var(--fs-title); font-weight: 750; letter-spacing: -0.3px; margin: 0; }
-  h2 { font-size: var(--fs-h2); font-weight: 700; letter-spacing: -0.1px; margin: 0 0 12px; }
-  a { color: var(--accent); }
+  h1 { font-size: var(--fs-title); font-weight: 600; letter-spacing: -0.02em; margin: 0; }
+  h2 { font-size: var(--fs-h2); font-weight: 600; letter-spacing: -0.01em; margin: 0 0 12px; }
+  a { color: var(--accent); text-underline-offset: 2px; }
 
-  /* ---------- 뼈대: 왼쪽 사이드바 + 본문 ---------- */
-  .app { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; }
-  .side { position: sticky; top: 0; height: 100vh; overflow: auto; display: flex; flex-direction: column; gap: 22px;
-          padding: 24px 16px 18px; background: var(--side-bg); border-right: 1px solid var(--border); }
-  .brand { padding: 0 10px; font-size: 20px; font-weight: 800; letter-spacing: -0.4px; }
-  .brand small { display: block; margin-top: 2px; color: var(--muted); font-size: var(--fs-small); font-weight: 500; letter-spacing: 0; }
-  .nav { display: grid; gap: 4px; }
-  .nav a { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; color: var(--muted);
-           text-decoration: none; font-weight: 600; transition: background 0.15s, color 0.15s; }
+  /* ---------- 뼈대: 위쪽 바(로고 · 가운데 떠 있는 pill 메뉴 · 테마 전환·마지막 점검) + 본문 ---------- */
+  .app { min-height: 100vh; }
+  .topbar { position: sticky; top: 0; z-index: 900; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center;
+            gap: 12px; height: var(--topbar-h); padding: 0 28px; background: var(--head-bg);
+            -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2); }
+  .logo { justify-self: start; display: inline-flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none;
+          font-size: 18px; font-weight: 600; letter-spacing: -0.02em; }
+  .logo-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; background: var(--accent); color: var(--on-accent); }
+  .logo-mark svg { width: 18px; height: 18px; }
+  .nav { display: flex; gap: 4px; padding: 5px; border-radius: 999px; background: var(--surface); box-shadow: var(--shadow); }
+  .nav a { display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px 9px 14px; border-radius: 999px; color: var(--muted);
+           text-decoration: none; font-weight: 600; white-space: nowrap; transition: background 0.15s, color 0.15s; }
   .nav a:hover { background: var(--surface-2); color: var(--text); }
-  .nav a[aria-current="page"] { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text);
-                                box-shadow: inset 3px 0 0 var(--accent); }
-  .nav a[aria-current="page"] svg { color: var(--accent); }
+  .nav a[aria-current="page"] { background: var(--accent); color: var(--on-accent); }
   .nav svg { width: 18px; height: 18px; flex: none; }
   .nav .short { display: none; }
-  .session { margin-top: auto; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface);
-             font-size: var(--fs-small); }
-  .session h2 { font-size: var(--fs-xs); font-weight: 700; color: var(--muted); letter-spacing: 0.4px; margin: 0 0 10px; }
-  .session dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; }
-  .session dt { color: var(--muted); }
-  .session dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-  .session dd#s-session { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--fs-xs); }
-  .theme-btn { margin-top: 14px; width: 100%; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border);
-               background: var(--surface-2); color: var(--text); cursor: pointer; text-align: left; font-size: var(--fs-small); }
-  .theme-btn:hover { border-color: var(--border-hi); }
+  .tb-right { justify-self: end; display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .tb-date { min-width: 0; color: var(--muted-strong); font-size: var(--fs-small); font-variant-numeric: tabular-nums; white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; }
+  .tb-date b { color: var(--text); font-weight: 600; }
+  /* 아이콘 버튼: 36px 흰 원 */
+  .icon-btn, .h-cal-btn, .dp-close { display: grid; place-items: center; flex: none; width: 36px; height: 36px; padding: 0; border: 0;
+                                     border-radius: 50%; background: var(--surface); color: var(--text); box-shadow: var(--shadow); cursor: pointer; }
+  .icon-btn:hover, .h-cal-btn:hover, .dp-close:hover { background: var(--surface-2); }
+  .icon-btn svg { width: 18px; height: 18px; }
   .main { min-width: 0; padding: 0 28px 48px; }
-
-  /* 상단 제목줄: 한 줄로 얇게 (제목 + 오른쪽에 세션·구간·시각). 스크롤해도 붙어 있게, 반투명 + 흐림 */
-  .page-head { position: sticky; top: 0; z-index: 40; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 16px; row-gap: 2px;
-               margin: 0 -28px; padding: 12px 28px;
-               background: var(--head-bg); -webkit-backdrop-filter: blur(12px) saturate(1.3); backdrop-filter: blur(12px) saturate(1.3);
-               border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
-  .page-head h1 { flex: none; font-size: 20px; line-height: 1.3; }
-  .page-head .sub { flex: 1 1 0; min-width: 0; margin: 0; color: var(--muted); font-size: var(--fs-small); text-align: right;
+  /* 1259px 이하: 메뉴는 화면 아래 고정 탭바 */
+  @media (max-width: 1259px) {
+    .topbar { grid-template-columns: minmax(0, 1fr) auto; }
+    .nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 950; justify-content: space-around; gap: 2px; border-radius: 18px 18px 0 0;
+           padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); box-shadow: 0 -1px 2px rgb(54 50 54 / 0.06), 0 -8px 24px rgb(54 50 54 / 0.08); }
+    .nav a { flex: 1 1 0; flex-direction: column; justify-content: center; gap: 3px; padding: 8px 4px; font-size: 12px; }
+    .main { padding-bottom: 96px; }
+  }
+  /* 제목줄: 한 줄로 얇게 (제목 + 오른쪽에 세션·구간·시각). 위쪽 바가 붙어 있으므로 제목줄은 함께 스크롤된다 */
+  .page-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 16px; row-gap: 2px; padding: 4px 0 0; }
+  .page-head h1 { flex: none; font-size: 22px; line-height: 1.3; }
+  .page-head .sub { flex: 1 1 0; min-width: 0; margin: 0; color: var(--muted-strong); font-size: var(--fs-small); text-align: right;
                     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .page-head .crumbs { flex: 1 0 100%; margin: 0; }
 
   /* ---------- 판정 배지: 옅은 배경 + 진한 글자 + 기호 ---------- */
-  .lv { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px 2px 7px; border-radius: 10px;
-        background: color-mix(in srgb, var(--c) 16%, transparent); color: var(--ink); font-size: var(--fs-small);
-        font-weight: 700; line-height: 1.45; white-space: nowrap; }
-  .lv .sw { min-width: 11px; text-align: center; font-size: var(--fs-xs); font-weight: 800; }
+  .lv { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px 2px 7px; border-radius: 999px;
+        background: color-mix(in srgb, var(--c) 20%, var(--surface)); color: var(--ink); font-size: var(--fs-small);
+        font-weight: 600; line-height: 1.45; white-space: nowrap; }
+  .lv .sw { min-width: 11px; text-align: center; font-size: var(--fs-xs); font-weight: 600; }
   .lv-danger { --c: var(--danger); --ink: var(--danger-ink); }
   .lv-warn   { --c: var(--warn);   --ink: var(--warn-ink); }
   .lv-ok     { --c: var(--ok);     --ink: var(--ok-ink); }
@@ -359,14 +439,15 @@ _TEMPLATE = r"""<!doctype html>
          align-items: center; padding: 16px 20px; min-width: 0; background: var(--surface); border: 1px solid var(--border);
          border-radius: 16px; box-shadow: var(--shadow); }
   .kpi-ico { grid-row: 1 / 3; display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 50%;
-             background: color-mix(in srgb, var(--c, var(--accent)) 16%, transparent); color: var(--c, var(--accent)); }
+             background: color-mix(in srgb, var(--c, var(--accent)) 20%, transparent); color: var(--c, var(--accent)); }
   .kpi-ico svg { width: 18px; height: 18px; }
   .kpi-ico.ok { --c: var(--ok); } .kpi-ico.warn { --c: var(--warn); } .kpi-ico.danger { --c: var(--danger); }
   .kpi .label { grid-column: 2 / 4; min-width: 0; color: var(--muted); font-size: var(--fs-small); font-weight: 600; line-height: 1.35;
                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .kpi .label small { margin-left: 4px; font-size: var(--fs-xs); font-weight: 500; }
-  .kpi .value { grid-column: 2; font-size: 29px; font-weight: 750; line-height: 1.1; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .kpi .value small { font-size: 14px; font-weight: 600; color: var(--muted); margin-left: 2px; letter-spacing: 0; }
+  /* 큰 숫자: Inter Tight 500, 자간 -0.02em. 단위는 작게 보조 글자색 */
+  .kpi .value { grid-column: 2; font-size: 30px; font-weight: 500; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .kpi .value small { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 2px; letter-spacing: 0; }
   .kpi .sub { grid-column: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; min-width: 0; padding-left: 4px;
               color: var(--muted); font-size: var(--fs-xs); line-height: 1.3; word-break: keep-all; }
   .kpi .sub > span { display: inline-flex; align-items: center; gap: 3px; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -376,33 +457,38 @@ _TEMPLATE = r"""<!doctype html>
   .home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; }
   .mapcard { display: grid; gap: 12px; min-width: 0; }
   /* 지도 배경은 페이지 테마와 따로 고른다 (밝은 지도 기본). 경로·마커·조작 버튼 색도 지도 배경에 맞춘다 */
+  /* 밟은 지도(기본): CARTO light_all 그대로 (못 받아 OpenTopoMap이면 회색 필터). 평면 지도: #ECECEC 바탕, 흰 길(격자)
+     마커: 등급 색 + 흰 테두리 2px + 옅은 그림자. 묶음: 흰 원 + 차콜 숫자 + 가장 높은 등급 색 테두리 */
   .mapcard[data-map="light"] {
-    --map-bg: #EEF2F7; --tile-filter: grayscale(1) contrast(0.82) brightness(1.02) sepia(0.3) hue-rotate(180deg) saturate(1.5); --tile-opacity: 0.55;
-    --map-grid: #D3DBE7; --map-text: #0F1A2E; --map-leader: #0F1A2E;
-    --m-danger: #C8302C; --m-warn: #A35F00; --m-ok: #12805C; --m-ink: #FFFFFF; --m-ring: #0B1220; --m-focus: #2350C8;
-    --ctl-bg: #FFFFFF; --ctl-hover: #EEF2F7; --ctl-text: #0F1A2E; --ctl-muted: #4D5B76; --ctl-border: #C3CDDD; --ctl-link: #2350C8;
-    --ctl-on: #2350C8; --ctl-on-text: #FFFFFF; --ctl-shadow: 0 1px 2px rgb(15 26 46 / 0.12), 0 4px 12px rgb(15 26 46 / 0.12);
+    --map-bg: #ECECEC; --tile-filter: none; --tile-opacity: 1;
+    --map-grid: #FFFFFF; --map-park: #CDEBDD; --map-text: #363236; --map-leader: #363236;
+    --m-danger: #EF6461; --m-warn: #F7B558; --m-ok: #A5D48C; --m-ink: #363236; --m-ring: #FFFFFF; --m-focus: #363236;
+    --m-shadow: drop-shadow(0 1px 1.5px rgb(54 50 54 / 0.35));
+    --ctl-bg: #FFFFFF; --ctl-hover: #F9F8FA; --ctl-text: #363236; --ctl-muted: #75707A; --ctl-border: #E4E2E6; --ctl-link: #363236;
+    --ctl-on: #363236; --ctl-on-text: #FFFFFF; --ctl-shadow: 0 1px 2px rgb(54 50 54 / 0.1), 0 4px 12px rgb(54 50 54 / 0.1);
   }
+  :root[data-tiles="topo"] .mapcard[data-map="light"] { --tile-filter: grayscale(1) contrast(0.85) brightness(1.05); --tile-opacity: 0.55; }
   .mapcard[data-map="dark"] {
-    --map-bg: #0B1220; --tile-filter: grayscale(1) invert(1) brightness(0.9) contrast(0.9) sepia(1) hue-rotate(180deg) saturate(1.6) brightness(0.7);
+    --map-bg: #1F1C1F; --tile-filter: grayscale(1) invert(1) brightness(0.85) contrast(0.9);
     --tile-opacity: 1;
-    --map-grid: #1C2742; --map-text: #E7ECF5; --map-leader: #E7ECF5;
-    --m-danger: #F25F5C; --m-warn: #F5B841; --m-ok: #2BB673; --m-ink: #0B1220; --m-ring: #0B1220; --m-focus: #4F8BFF;
-    --ctl-bg: #131C31; --ctl-hover: #1A2540; --ctl-text: #E7ECF5; --ctl-muted: #93A1BC; --ctl-border: #2C3A5A; --ctl-link: #7FAAFF;
-    --ctl-on: #4F8BFF; --ctl-on-text: #0B1220; --ctl-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 12px rgb(0 0 0 / 0.3);
+    --map-grid: #2E2A2E; --map-park: #2C3A33; --map-text: #F2F0F2; --map-leader: #F2F0F2;
+    --m-danger: #EF6461; --m-warn: #F7B558; --m-ok: #A5D48C; --m-ink: #363236; --m-ring: #1F1C1F; --m-focus: #F2F0F2;
+    --m-shadow: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.5));
+    --ctl-bg: #2A262A; --ctl-hover: #332E33; --ctl-text: #F2F0F2; --ctl-muted: #ADA7B0; --ctl-border: #3D383D; --ctl-link: #F2F0F2;
+    --ctl-on: #F2F0F2; --ctl-on-text: #1F1C1F; --ctl-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 12px rgb(0 0 0 / 0.3);
   }
-  .mapbox { position: relative; isolation: isolate; height: clamp(440px, calc(100vh - 330px), 760px); border: 1px solid var(--border);
-            border-radius: 16px; overflow: hidden; background: var(--map-bg); box-shadow: var(--shadow); }
+  .mapbox { position: relative; isolation: isolate; height: clamp(440px, calc(100vh - 400px), 760px); border: 0;
+            border-radius: var(--radius); overflow: hidden; background: var(--map-bg); box-shadow: var(--shadow); }
   #map, #plane { position: absolute; inset: 0; }
-  :is(#map, #h-map).leaflet-container { background: var(--map-bg); font: var(--fs-small) var(--font); }
-  :is(#map, #h-map) .leaflet-tile-pane { filter: var(--tile-filter); opacity: var(--tile-opacity); }
-  :is(#map, #h-map) .leaflet-bar { border: 1px solid var(--ctl-border); border-radius: 10px; overflow: hidden; box-shadow: var(--ctl-shadow); }
-  :is(#map, #h-map) .leaflet-bar a { width: 32px; height: 32px; line-height: 32px; background: var(--ctl-bg); color: var(--ctl-text); border-bottom: 1px solid var(--ctl-border); }
-  :is(#map, #h-map) .leaflet-bar a:hover { background: var(--ctl-hover); }
-  :is(#map, #h-map) .leaflet-bar a.leaflet-disabled { color: var(--ctl-muted); background: var(--ctl-bg); opacity: 0.6; }
-  :is(#map, #h-map) .leaflet-control-attribution { padding: 2px 8px; border-radius: 10px 0 0 0; color: var(--ctl-muted);
+  :is(#map, #h-map, #d-map).leaflet-container { background: var(--map-bg); font: var(--fs-small) var(--font); }
+  :is(#map, #h-map, #d-map) .leaflet-tile-pane { filter: var(--tile-filter); opacity: var(--tile-opacity); }
+  :is(#map, #h-map, #d-map) .leaflet-bar { border: 1px solid var(--ctl-border); border-radius: 10px; overflow: hidden; box-shadow: var(--ctl-shadow); }
+  :is(#map, #h-map, #d-map) .leaflet-bar a { width: 32px; height: 32px; line-height: 32px; background: var(--ctl-bg); color: var(--ctl-text); border-bottom: 1px solid var(--ctl-border); }
+  :is(#map, #h-map, #d-map) .leaflet-bar a:hover { background: var(--ctl-hover); }
+  :is(#map, #h-map, #d-map) .leaflet-bar a.leaflet-disabled { color: var(--ctl-muted); background: var(--ctl-bg); opacity: 0.6; }
+  :is(#map, #h-map, #d-map) .leaflet-control-attribution { padding: 2px 8px; border-radius: 10px 0 0 0; color: var(--ctl-muted);
                                       background: color-mix(in srgb, var(--ctl-bg) 90%, transparent); }
-  :is(#map, #h-map) .leaflet-control-attribution a { color: var(--ctl-link); }
+  :is(#map, #h-map, #d-map) .leaflet-control-attribution a { color: var(--ctl-link); }
   .map-tools { position: absolute; top: 12px; right: 12px; z-index: 600; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
   .map-seg { display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px; border: 1px solid var(--ctl-border);
              background: var(--ctl-bg); box-shadow: var(--ctl-shadow); }
@@ -412,8 +498,9 @@ _TEMPLATE = r"""<!doctype html>
   .map-seg button[aria-pressed="true"] { background: var(--ctl-on); color: var(--ctl-on-text); }
   #plane svg { display: block; width: 100%; height: 100%; }
   .ev-marker, .ev-cluster { background: none; border: none; }
-  .ev-marker svg, .ev-cluster svg { display: block; overflow: visible; }
-  .ev-marker:focus-visible, .ev-cluster:focus-visible { outline: 2px solid var(--m-focus); outline-offset: 1px; border-radius: 8px; }
+  .ev-marker svg, .ev-cluster svg { display: block; overflow: visible; filter: var(--m-shadow, none); }
+  :is(#plane, #h-plane, #d-plane) .ev { filter: var(--m-shadow, none); }
+  .ev-marker:focus-visible, .ev-cluster:focus-visible { outline: 2px solid var(--m-focus); outline-offset: 1px; border-radius: 50%; }
   #plane .ev { cursor: pointer; }
   #plane .ev:focus { outline: none; }
   #plane .ev:focus-visible .hit { stroke: var(--m-focus); stroke-width: 2; }
@@ -424,6 +511,9 @@ _TEMPLATE = r"""<!doctype html>
             font-size: var(--fs-small); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
   .legend .item { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
   .legend .sep { width: 1px; height: 18px; background: var(--border); }
+  /* 모양 범례: 회색 (판정 색 필터 버튼과 헷갈리지 않게 색을 쓰지 않는다) */
+  .shape-legend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+  .shape-legend .shp { width: 14px; height: 14px; flex: none; fill: var(--muted); }
   /* 판정 필터: 켜짐 = 판정색 옅은 배경 + 진한 판정 글자색 테두리, 꺼짐 = 흐린 점 + 흐린 글자 (개수는 그대로) */
   .lv-filter { display: inline-flex; flex-wrap: wrap; gap: 6px; }
   .lv-btn { --c: var(--ok); --ink: var(--ok-ink); display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px 4px 9px;
@@ -434,11 +524,12 @@ _TEMPLATE = r"""<!doctype html>
   .lv-btn .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 1px var(--ink); opacity: 0.4; }
   .lv-btn .n { font-variant-numeric: tabular-nums; }
   .lv-btn:hover { border-color: var(--border-hi); color: var(--text); }
-  .lv-btn[aria-pressed="true"] { background: color-mix(in srgb, var(--c) 16%, transparent); border-color: var(--ink); color: var(--text); font-weight: 700; }
+  .lv-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .lv-btn[aria-pressed="true"] .dot { box-shadow: 0 0 0 1.5px var(--on-accent); }
   .lv-btn[aria-pressed="true"] .dot { opacity: 1; }
   .map-empty { position: absolute; left: 50%; top: 50%; z-index: 550; transform: translate(-50%, -50%); padding: 10px 16px;
                border: 1px solid var(--ctl-border); border-radius: 12px; background: var(--ctl-bg); color: var(--ctl-text);
-               font-weight: 650; box-shadow: var(--ctl-shadow); pointer-events: none; white-space: nowrap; }
+               font-weight: 600; box-shadow: var(--ctl-shadow); pointer-events: none; white-space: nowrap; }
   .map-empty[hidden] { display: none; }
   /* 지도 옆 상세 패널: 마커를 누른 지점의 사진·측정값·근거. 길면 패널 안에서만 스크롤 */
   .dpanel { position: relative; display: flex; flex-direction: column; min-width: 0; padding: 18px 18px 20px; overflow: auto;
@@ -446,7 +537,7 @@ _TEMPLATE = r"""<!doctype html>
   .dp-empty { margin: auto; padding: 32px 12px; color: var(--muted); text-align: center; word-break: keep-all; }
   .dp-empty .ico { display: block; width: 28px; height: 28px; margin: 0 auto 10px; }
   .dp-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding-right: 40px; margin-bottom: 14px; }
-  .dp-head .kind { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-h2); font-weight: 700; }
+  .dp-head .kind { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-h2); font-weight: 600; }
   .dp-head .id { color: var(--muted); font-size: var(--fs-small); font-variant-numeric: tabular-nums; }
   .dp-close { position: absolute; top: 12px; right: 12px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0;
               border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--text); cursor: pointer; }
@@ -463,40 +554,63 @@ _TEMPLATE = r"""<!doctype html>
   .dp-actions { margin-top: 16px; }
   .dp-actions .btn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
 
-  /* ---------- 외관 검사 · 물리적 안정성 (목록 + 상세) ---------- */
-  .crumbs { margin: 0 0 6px; color: var(--muted); font-size: var(--fs-small); overflow-wrap: anywhere; }
-  .crumbs a { color: var(--accent); text-decoration: none; font-weight: 600; }
-  .crumbs a:hover { text-decoration: underline; }
-  .v-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0 16px; }
+  /* ---------- 검사 결과 (노면 형상 + 흔들림): 요약 한 줄 + 왼쪽 목록(360px) + 오른쪽 상세 ---------- */
+  .d-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 16px 0; padding: 12px 16px;
+               background: var(--surface); border: 1px solid var(--border); border-radius: 12px; font-weight: 600;
+               font-variant-numeric: tabular-nums; }
+  .d-summary .sep { width: 1px; height: 16px; background: var(--border); }
+  .d-summary .blk { display: inline-flex; align-items: center; gap: 6px; }
+  .d-grid { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 1259px) { .d-grid { grid-template-columns: minmax(0, 1fr); } }
+  .d-left { display: grid; gap: 10px; min-width: 0; }
   .tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
-  .tabs button { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border: 0; border-radius: 8px; background: none;
-                 color: var(--muted); font-weight: 600; cursor: pointer; }
+  .tabs button { display: inline-flex; flex: 1 1 auto; justify-content: center; align-items: center; gap: 6px; padding: 7px 10px; border: 0;
+                 border-radius: 8px; background: none; color: var(--muted); font-weight: 600; cursor: pointer; }
   .tabs button:hover { color: var(--text); background: var(--surface-2); }
-  .tabs button[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text);
-                                       box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
+  .tabs button[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
+  .tabs button[aria-selected="true"] .n { color: inherit; opacity: 0.8; }
   .tabs .n { color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .toggle { display: inline-flex; align-items: center; gap: 8px; color: var(--text); cursor: pointer; user-select: none; }
-  .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
-  .v-grid { display: grid; grid-template-columns: 372px minmax(0, 1fr); gap: 16px; align-items: start; }
-  .v-list { display: grid; gap: 8px; max-height: calc(100vh - 230px); overflow: auto; padding: 2px; }
+  .d-list { display: grid; gap: 6px; max-height: calc(100vh - 360px); min-height: 200px; overflow: auto; padding: 2px; }
+  @media (max-width: 1259px) { .d-list { max-height: 420px; } }
   .v-empty { padding: 28px 16px; color: var(--muted); text-align: center; border: 1px dashed var(--border); border-radius: 16px; }
-  .v-row { width: 100%; display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 12px; padding: 10px; border: 1px solid var(--border);
-           border-radius: 12px; background: var(--surface); text-align: left; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
-  .v-row:hover { background: var(--surface-2); }
-  .v-row[aria-selected="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent);
+  /* 행: [판정 색 점] [종류 모양 / 흔들림 ◆] 종류 값 [확정·의심] / 짧은 근거 */
+  .d-row { width: 100%; display: grid; grid-template-columns: 10px 20px minmax(0, 1fr) auto; align-items: center; gap: 2px 8px;
+           padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); text-align: left;
+           cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+  .d-row:hover { background: var(--surface-2); }
+  .d-row[aria-selected="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent);
                                  background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
-  .v-thumb { width: 56px; height: 56px; display: grid; place-items: center; overflow: hidden; border-radius: 10px;
-             border: 1px solid var(--border); background: var(--surface-2); }
-  .v-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .v-thumb .ico { width: 26px; height: 26px; }
-  .v-row .l1 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-weight: 700; }
-  .v-row .val { font-variant-numeric: tabular-nums; }
-  .v-row .nt { margin-top: 2px; color: var(--muted); font-size: var(--fs-small); word-break: keep-all; overflow-wrap: anywhere; }
-  .v-row .tm { margin-top: 2px; color: var(--muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+  .d-row .lvd { width: 10px; height: 10px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 1px var(--ink); }
+  .d-row .ico { width: 18px; height: 18px; }
+  .d-row .what { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-weight: 600; white-space: nowrap; }
+  .d-row .val { font-variant-numeric: tabular-nums; }
+  .d-row .why { grid-column: 3 / 5; min-width: 0; color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; overflow: hidden;
+                text-overflow: ellipsis; }
+  .lv-c-danger { --c: var(--danger); --ink: var(--danger-ink); } .lv-c-warn { --c: var(--warn); --ink: var(--warn-ink); }
+  .lv-c-ok { --c: var(--ok); --ink: var(--ok-ink); }
+  .dia { display: inline-grid; place-items: center; width: 18px; color: var(--ink); font-size: 15px; line-height: 1; }
+  /* 흔들림 확정(2걸음 이상 기준 초과) / 의심(1걸음) */
+  .cf { padding: 1px 7px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); font-size: var(--fs-xs); font-weight: 600;
+        white-space: nowrap; }
+  .cf.sure { border-color: var(--danger-ink); color: var(--danger-ink); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+  .d-right { display: grid; gap: 16px; min-width: 0; }
+  .d-loc { display: block; padding: 18px 20px 20px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
+  .d-loc h2 { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 15px; margin: 0 0 10px; }
+  .d-loc h2 small { color: var(--muted); font-size: var(--fs-small); font-weight: 600; }
+  .d-mapbox { position: relative; isolation: isolate; height: 240px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px;
+              background: var(--map-bg); }
+  #d-map, #d-plane { position: absolute; inset: 0; }
+  #d-plane svg { display: block; width: 100%; height: 100%; }
+  #d-map path.d-dot-danger { fill: var(--m-danger); } #d-map path.d-dot-warn { fill: var(--m-warn); } #d-map path.d-dot-ok { fill: var(--m-ok); }
+  #d-map path.d-dot { stroke: var(--m-ring); stroke-width: 1.5; fill-opacity: 1; }
+  /* 밟은 블록 (검사 범위): 옅은 회색 칸, 판정 마커보다 눈에 덜 띄게 */
+  .d-blk { fill: #8F8A93; fill-opacity: 0.22; stroke: #8F8A93; stroke-opacity: 0.4; stroke-width: 0.6; }
   .v-detail { min-width: 0; padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); }
   .v-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
-  .v-head .kind { display: inline-flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 750; }
+  .v-head .kind { display: inline-flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; }
   .v-head .kind .ico { width: 22px; height: 22px; }
+  .v-head .kind .id { color: var(--muted); font-size: var(--fs-small); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .v-head .kind .dia { width: 22px; font-size: 19px; }
   .rep { padding: 4px 12px; border-radius: 10px; border: 1px solid var(--border); color: var(--muted); font-size: var(--fs-small); font-weight: 600; }
   .rep.in { border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text); }
   .v-detail .d-photo { margin: 18px 0 10px; }
@@ -505,14 +619,14 @@ _TEMPLATE = r"""<!doctype html>
               border: 1px dashed var(--border); border-radius: 12px; background: var(--surface-2); color: var(--muted); }
   .no-photo .ico { width: 30px; height: 30px; opacity: 0.7; }
   .v-big { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 2px; }
-  .v-big .num { font-size: 56px; font-weight: 780; line-height: 1; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
-  .v-big .unit { font-size: 20px; font-weight: 600; color: var(--muted); }
-  .v-crit { margin: 8px 0 18px; font-weight: 650; }
+  .v-big .num { font-size: 56px; font-weight: 500; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .v-big .unit { font-size: 18px; font-weight: 500; color: var(--muted); }
+  .v-crit { margin: 8px 0 18px; font-weight: 600; }
   .v-crit .k, .v-crit .x { color: var(--muted); font-weight: 500; }
   .v-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0 0 18px; }
   .v-card { min-width: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
   .v-card .k { color: var(--muted); font-size: var(--fs-small); overflow-wrap: anywhere; }
-  .v-card .v { margin-top: 2px; font-size: 22px; font-weight: 750; font-variant-numeric: tabular-nums; }
+  .v-card .v { margin-top: 2px; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .v-card .s { color: var(--muted); font-size: var(--fs-xs); }
   .v-card.diff { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: inset 3px 0 0 var(--accent); }
   .v-basis { margin-top: 6px; padding-top: 18px; border-top: 1px solid var(--border); }
@@ -521,7 +635,7 @@ _TEMPLATE = r"""<!doctype html>
   .v-basis dt { color: var(--muted); }
   .v-basis dd { margin: 0; word-break: keep-all; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
   .v-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 20px; }
-  .btn { padding: 9px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); font-weight: 650; cursor: pointer; }
+  .btn { padding: 9px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); font-weight: 600; cursor: pointer; }
   .btn:hover { border-color: var(--border-hi); }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .btn.primary:hover { filter: brightness(1.08); }
@@ -529,23 +643,19 @@ _TEMPLATE = r"""<!doctype html>
   @media (max-width: 1259px) {
     .kpis { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
   }
-  @media (max-width: 1000px) {
-    .v-grid { grid-template-columns: minmax(0, 1fr); }
-    .v-list { max-height: none; }
-  }
 
-  /* ---------- 물리적 안정성: 발끝 높이 그래프 ---------- */
+  /* ---------- 흔들림 상세: 발끝 높이 그래프 ---------- */
   .fg { margin: 10px 0 18px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
   .fg-box { width: 100%; }
   .fg-box svg { display: block; width: 100%; height: auto; }
   .fg figcaption { margin-top: 8px; color: var(--muted); font-size: var(--fs-xs); word-break: keep-all; }
   .fg-empty { display: grid; place-items: center; height: 180px; border: 1px dashed var(--border); border-radius: 12px;
               background: var(--surface); color: var(--muted); }
-  .p-near { margin: 18px 0 0; padding-top: 18px; border-top: 1px solid var(--border); }
-  .p-near h2 { font-size: 15px; margin: 0 0 8px; }
-  .p-near p { margin: 0; }
-  .p-near ul { margin: 6px 0 0; padding-left: 18px; }
-  .p-near a { color: var(--accent); font-weight: 600; }
+  .d-near { margin: 18px 0 0; padding-top: 18px; border-top: 1px solid var(--border); }
+  .d-near h2 { font-size: 15px; margin: 0 0 8px; }
+  .d-near p { margin: 0; }
+  .d-near ul { margin: 6px 0 0; padding-left: 18px; }
+  .d-near a { color: var(--accent); font-weight: 600; }
 
   /* ---------- 점검 이력 ---------- */
   /* 날짜 고르기: 칩(최신순, 왼쪽 점 = 그날 가장 높은 판정) + 달력 */
@@ -553,7 +663,7 @@ _TEMPLATE = r"""<!doctype html>
   .h-dates[hidden] { display: none; }
   .h-chips { display: flex; gap: 8px; min-width: 0; padding: 2px; overflow-x: auto; scrollbar-width: thin; }
   .h-chip { display: inline-flex; align-items: center; gap: 7px; flex: none; padding: 7px 14px 7px 11px; border: 1px solid var(--border);
-            border-radius: 999px; background: var(--surface); color: var(--text); font-size: var(--fs-small); font-weight: 650;
+            border-radius: 999px; background: var(--surface); color: var(--text); font-size: var(--fs-small); font-weight: 600;
             font-variant-numeric: tabular-nums; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
   .h-chip:hover { border-color: var(--border-hi); }
   .h-chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
@@ -568,7 +678,7 @@ _TEMPLATE = r"""<!doctype html>
   .h-cal { position: absolute; top: calc(100% + 8px); left: 0; z-index: 60; width: 296px; padding: 14px; background: var(--surface);
            border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-pop); }
   .h-cal[hidden] { display: none; }
-  .h-cal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-weight: 700; }
+  .h-cal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-weight: 600; }
   .h-cal-head button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--border);
                        border-radius: 8px; background: var(--surface-2); color: var(--text); cursor: pointer; }
   .h-cal-head button:disabled { opacity: 0.4; cursor: default; }
@@ -576,15 +686,12 @@ _TEMPLATE = r"""<!doctype html>
   .h-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; text-align: center; }
   .h-cal-grid .wd { padding: 4px 0; color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
   .h-cal-grid button { position: relative; height: 36px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--text);
-                       font-weight: 700; font-variant-numeric: tabular-nums; cursor: pointer; }
+                       font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; }
   .h-cal-grid button:disabled { color: var(--muted); font-weight: 400; opacity: 0.45; cursor: default; }
   .h-cal-grid button:not(:disabled):hover { background: var(--surface-2); }
   .h-cal-grid button .h-dot { position: absolute; left: 50%; bottom: 3px; width: 6px; height: 6px; transform: translateX(-50%); }
   .h-cal-grid button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
   .h-cal-grid button[aria-pressed="true"] .h-dot { box-shadow: 0 0 0 1.5px var(--on-accent); }
-  /* 점검 이력에서는 날짜를 위 날짜 줄에서 고른다: 사이드바의 측정 세션 제목·세션·측정 시간(가장 최근 점검)은 숨긴다 */
-  .app:has(#page-history:not([hidden])) .session h2,
-  .app:has(#page-history:not([hidden])) .session dl > :nth-child(-n+4) { display: none; }
   .h-tools { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 16px; margin: 16px 0 6px; }
   .h-filters { display: flex; flex-wrap: wrap; gap: 8px 10px; min-width: 0; }
   .h-f { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
@@ -615,10 +722,10 @@ _TEMPLATE = r"""<!doctype html>
   #h-map path.h-route-line { stroke: var(--h-route); }
   .h-route-btn { position: absolute; top: 12px; left: 12px; z-index: 600; display: inline-flex; align-items: center; gap: 7px;
                  padding: 6px 12px 6px 10px; border: 1px solid var(--ctl-border); border-radius: 10px; background: var(--ctl-bg);
-                 color: var(--ctl-text); font-size: var(--fs-small); font-weight: 650; box-shadow: var(--ctl-shadow); cursor: pointer; }
+                 color: var(--ctl-text); font-size: var(--fs-small); font-weight: 600; box-shadow: var(--ctl-shadow); cursor: pointer; }
   .h-route-btn:hover { background: var(--ctl-hover); }
   .h-route-btn .sw { width: 18px; height: 4px; border-radius: 2px; background: var(--h-route); box-shadow: 0 0 0 1.5px #FFFFFF; }
-  .h-route-btn[aria-pressed="true"] { border-color: var(--h-route); box-shadow: inset 0 0 0 1px var(--h-route), var(--ctl-shadow); }
+  .h-route-btn[aria-pressed="true"] { background: var(--ctl-on); border-color: var(--ctl-on); color: var(--ctl-on-text); }
   .h-route-btn[aria-pressed="false"] { color: var(--ctl-muted); }
   .h-route-btn[aria-pressed="false"] .sw { opacity: 0.35; }
   /* 경로 눈금(100 m마다)·출발·도착: 원 + 글자 상자 (클릭되지 않음) */
@@ -628,14 +735,14 @@ _TEMPLATE = r"""<!doctype html>
               background: #FFFFFF; border: 2px solid var(--h-route); }
   .h-tick b, .h-end b { position: absolute; padding: 0 5px; border: 1px solid var(--ctl-border); border-radius: 6px; background: var(--ctl-bg);
                         color: var(--ctl-text); white-space: nowrap; box-shadow: var(--ctl-shadow); }
-  .h-tick b { font: 650 10.5px/16px var(--font); }
+  .h-tick b { font: 600 10.5px/16px var(--font); }
   .h-tick.s-r b { left: 9px; top: -9px; }
   .h-tick.s-t b { left: 0; bottom: 15px; transform: translateX(-50%); }
   .h-end i { position: absolute; left: -7px; top: -7px; width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%;
-             border: 3px solid #FFFFFF; box-shadow: 0 0 0 1.5px #0B1220; }
+             border: 3px solid #FFFFFF; box-shadow: 0 0 0 1.5px #363236; }
   .h-end.start i { background: var(--h-route); }
-  .h-end.finish i { background: #0B1220; }
-  .h-end b { font: 750 11.5px/18px var(--font); }
+  .h-end.finish i { background: #363236; }
+  .h-end b { font: 600 11.5px/18px var(--font); }
   .h-end.s-r b { left: 12px; top: -10px; } .h-end.s-l b { right: 12px; top: -10px; }
   .h-end.s-t b { left: 0; bottom: 12px; transform: translateX(-50%); } .h-end.s-b b { left: 0; top: 12px; transform: translateX(-50%); }
   .h-card { min-width: 0; padding: 20px 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); }
@@ -645,31 +752,31 @@ _TEMPLATE = r"""<!doctype html>
   /* 종류별 판정 누적 막대: 칸 사이 2px, 칸 안에 기호 + 숫자, 오른쪽에 글자 요약 (색만으로 구분하지 않음) */
   .h-bars { display: grid; gap: 14px; }
   .h-bar { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 4px 12px; }
-  .h-bar .k { display: inline-flex; align-items: center; gap: 6px; font-weight: 650; font-size: var(--fs-small); }
+  .h-bar .k { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: var(--fs-small); }
   .h-bar .track { display: flex; gap: 2px; height: 26px; min-width: 0; }
   .h-bar .seg { display: flex; align-items: center; justify-content: center; min-width: 0; overflow: hidden; border-radius: 4px;
-                color: #0B1220; font-size: var(--fs-xs); font-weight: 750; white-space: nowrap; font-variant-numeric: tabular-nums;
+                color: var(--on-grade); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums;
                 container-type: inline-size; }
   @container (max-width: 26px) { .h-bar .seg span { visibility: hidden; } }
   .h-bar .seg.danger { background: var(--danger); } .h-bar .seg.warn { background: var(--warn); } .h-bar .seg.ok { background: var(--ok); }
   .h-bar .zero { color: var(--muted); font-size: var(--fs-xs); line-height: 26px; }
   .h-bar .line { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .h-bar .tot { font-size: var(--fs-small); font-weight: 750; font-variant-numeric: tabular-nums; }
+  .h-bar .tot { font-size: var(--fs-small); font-weight: 600; font-variant-numeric: tabular-nums; }
   .h-bar .sum { grid-column: 2; color: var(--muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
   .h-bars-total { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: var(--fs-small);
                   font-variant-numeric: tabular-nums; }
-  .h-bars-total b { color: var(--text); font-weight: 700; }
+  .h-bars-total b { color: var(--text); font-weight: 600; }
   .h-card .h-tools { margin: 0 0 12px; }
   .h-more { display: block; width: 100%; margin-top: 10px; padding: 10px; border: 1px dashed var(--border); border-radius: 10px;
-            background: none; color: var(--accent); font-size: var(--fs-small); font-weight: 650; cursor: pointer; }
+            background: none; color: var(--accent); font-size: var(--fs-small); font-weight: 600; cursor: pointer; }
   .h-more:hover { background: var(--surface-2); }
   .h-more[hidden] { display: none; }
   .h-table tbody tr.hl { background: var(--surface-2); }
-  .h-bar .sum b { color: var(--text); font-weight: 650; }
+  .h-bar .sum b { color: var(--text); font-weight: 600; }
   /* 표: 길면 표 안에서만 스크롤, 머리줄 고정 */
   .h-table-wrap { max-height: 560px; overflow: auto; margin: 0 -8px; padding: 0 8px; }
   .h-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--fs-small); font-variant-numeric: tabular-nums; }
-  .h-table th { position: sticky; top: 0; z-index: 1; padding: 0; background: var(--surface); color: var(--muted); font-weight: 650;
+  .h-table th { position: sticky; top: 0; z-index: 1; padding: 0; background: var(--surface); color: var(--muted); font-weight: 600;
                 text-align: left; white-space: nowrap; border-bottom: 1px solid var(--border); }
   .h-table th > span, .h-table th > button { display: flex; align-items: center; gap: 4px; width: 100%; padding: 10px 10px; }
   .h-table th > button { border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
@@ -685,7 +792,7 @@ _TEMPLATE = r"""<!doctype html>
   .h-table .kind { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
   .h-table .crit { color: var(--muted); word-break: keep-all; min-width: 140px; }
   .h-table .ll, .h-table .tm { color: var(--muted); white-space: nowrap; }
-  .h-table .go { color: var(--accent); font-weight: 650; text-decoration: none; white-space: nowrap; }
+  .h-table .go { color: var(--accent); font-weight: 600; text-decoration: none; white-space: nowrap; }
   .h-table .go:hover { text-decoration: underline; }
 
   /* ---------- 툴팁 · 묶음 고르기 (카드 스타일) ---------- */
@@ -693,7 +800,7 @@ _TEMPLATE = r"""<!doctype html>
          background: var(--surface); color: var(--text); border: 1px solid var(--border); box-shadow: var(--shadow-pop); font-size: var(--fs-xs); }
   .tip b { display: block; margin-bottom: 2px; font-size: var(--fs-small); }
   .tip div { color: var(--muted); }
-  .tip .tip-go { color: var(--accent); font-weight: 650; margin-top: 4px; }
+  .tip .tip-go { color: var(--accent); font-weight: 600; margin-top: 4px; }
   .tip .tip-photo { display: flex; align-items: center; gap: 4px; color: var(--text); margin-top: 3px; }
   .picker { position: fixed; z-index: 3001; width: 260px; max-height: 300px; overflow: auto; padding: 6px; border-radius: 12px;
             background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-pop); }
@@ -710,18 +817,35 @@ _TEMPLATE = r"""<!doctype html>
   .ph img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .ph .ph-mark { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .d-photo figcaption { display: grid; justify-items: center; gap: 2px; margin-top: 8px; color: var(--muted); font-size: var(--fs-xs); text-align: center; }
-  .d-photo .ph-cap { color: var(--text); font-size: var(--fs-small); font-weight: 650; word-break: keep-all; }
+  .d-photo .ph-cap { color: var(--text); font-size: var(--fs-small); font-weight: 600; word-break: keep-all; }
   .d-photo .ph-hint { display: inline-flex; align-items: center; gap: 5px; }
   .dlg { width: min(94vw, 980px); max-height: 94vh; padding: 0; border: 1px solid var(--border); border-radius: 16px;
          background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
-  .dlg::backdrop { background: rgb(5 9 18 / 0.72); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+  .dlg::backdrop { background: rgb(31 28 31 / 0.6); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
   .dlg-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px 14px 20px; border-bottom: 1px solid var(--border); }
   .dlg-head h2 { margin: 0; font-size: var(--fs-h2); flex: 1; min-width: 0; }
   .dlg-head button { border: 1px solid var(--border); background: var(--surface-2); border-radius: 10px; padding: 6px 12px; cursor: pointer; }
   .dlg-body { padding: 16px; }
   .dlg .ph { --maxh: calc(94vh - 140px); }
   .dlg-cap { margin: 10px 2px 0; color: var(--muted); font-size: var(--fs-small); word-break: keep-all; overflow-wrap: anywhere; }
-  .dlg-cap-main { color: var(--text); font-weight: 650; }
+  .dlg-cap-main { color: var(--text); font-weight: 600; }
+
+  /* ---------- 카드: 모서리 18px, 테두리 없이 옅은 그림자 ---------- */
+  .kpi, .legend, .dpanel, .v-detail, .d-loc, .h-card, .d-summary { border: 0; border-radius: var(--radius); background: var(--surface);
+                                                                     box-shadow: var(--shadow); }
+  .h-mapbox, .d-mapbox { border: 0; border-radius: 14px; }
+  /* ---------- 버튼·칩: 완전 둥근 모양(pill) ---------- */
+  .btn, .lv-btn, .h-chip, .retry, .h-route-btn, .h-reset, .h-more, .map-seg, .map-seg button, .tabs, .tabs button,
+  .h-f select, .cf, .rep, .ph-btn { border-radius: 999px; }
+  .ph-btn { border-radius: 12px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .map-seg { padding: 4px; }
+  .map-seg button { padding: 6px 12px; }
+  .tabs { padding: 4px; border: 0; box-shadow: var(--shadow); }
+  .lv-btn, .h-chip { background: var(--surface); }
+  .h-cal-btn, .dp-close { width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--surface);
+                         color: var(--text); box-shadow: var(--shadow); }
 
   /* 1259px 이하: 상세 패널은 지도 아래 */
   @media (max-width: 1259px) {
@@ -730,31 +854,23 @@ _TEMPLATE = r"""<!doctype html>
   /* 1260px 이상: 종합 현황을 화면 높이에 맞춘다. 지도는 남은 높이, 오른쪽 상세 패널(380px)은 지도+범례 높이(패널 안에서만 스크롤) */
   @media (min-width: 1260px) and (min-height: 700px) {
     .main:has(> #page-home:not([hidden])) { padding-bottom: 0; }
-    #page-home:not([hidden]) { display: flex; flex-direction: column; height: 100vh; height: 100dvh; padding-bottom: 20px; }
+    #page-home:not([hidden]) { display: flex; flex-direction: column; height: calc(100vh - var(--topbar-h)); height: calc(100dvh - var(--topbar-h));
+                               padding-bottom: 20px; }
     #page-home .home-grid { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr) auto; row-gap: 12px; }
     #page-home .mapcard { display: contents; }  /* 지도·범례를 격자에 바로 놓는다 (지도 색 변수는 그대로 물려받음) */
     #page-home .mapbox { grid-column: 1; grid-row: 1; height: auto; min-height: 0; }
     #page-home .legend { grid-column: 1; grid-row: 2; }
     #page-home .dpanel { grid-column: 2; grid-row: 1 / 3; min-height: 0; }
   }
-  /* ---------- 모바일: 사이드바 → 위쪽 탭 ---------- */
+  /* ---------- 모바일: 아래 탭바는 짧은 이름 ---------- */
   @media (max-width: 760px) {
-    :root { --fs-title: 20px; --fs-h2: 15px; }
-    .app { grid-template-columns: minmax(0, 1fr); }
-    .side { position: static; height: auto; gap: 12px; padding: 14px 16px 16px; border-right: 0; border-bottom: 1px solid var(--border); }
-    .brand { display: flex; align-items: baseline; gap: 8px; padding: 0 2px; font-size: 18px; }
-    .brand small { display: inline; }
-    .nav { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
-    .nav a { flex-direction: column; justify-content: center; gap: 3px; padding: 8px 2px; font-size: 12px; text-align: center; }
-    .nav a[aria-current="page"] { box-shadow: inset 0 -3px 0 var(--accent); }
+    :root { --fs-title: 20px; --fs-h2: 15px; --topbar-h: 60px; }
+    .topbar { padding: 0 16px; }
+    .tb-date .k { display: none; }
     .nav .full { display: none; }
     .nav .short { display: inline; }
-    .session { margin: 0; padding: 12px 14px; font-size: var(--fs-xs); border-radius: 12px; }
-    .session h2 { display: none; }
-    .session dl { gap: 2px 10px; }
-    .theme-btn { margin-top: 10px; padding: 6px 10px; font-size: 12px; }
-    .main { padding: 0 16px 36px; }
-    .page-head { position: static; margin: 0 -16px; padding: 12px 16px; }
+    .main { padding: 0 16px 96px; }
+    .page-head { padding-top: 0; }
     .page-head h1 { font-size: 19px; }
     .page-head .sub { flex-basis: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
     .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }  /* 모바일도 2×2 유지 */
@@ -766,7 +882,7 @@ _TEMPLATE = r"""<!doctype html>
     .kpi .value { font-size: 26px; }
     .kpi .sub { grid-column: 1 / 3; padding: 6px 0 0; }
     .mapbox { height: 380px; }
-    :is(#map, #h-map) .leaflet-control-attribution { font-size: 10px; }
+    :is(#map, #h-map, #d-map) .leaflet-control-attribution { font-size: 10px; }
     .legend { padding: 10px 12px; gap: 6px 12px; }
     .v-detail { padding: 16px; }
     .v-big .num { font-size: 44px; }
@@ -790,7 +906,7 @@ _TEMPLATE = r"""<!doctype html>
     .h-points tr { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 4px 8px; padding: 12px;
                    border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
     .h-points td { display: block; min-width: 0; padding: 0; border: 0; }
-    .h-points td:nth-child(3) { justify-self: end; font-weight: 700; }
+    .h-points td:nth-child(3) { justify-self: end; font-weight: 600; }
     .h-points td:nth-child(4) { grid-column: 1 / -1; min-width: 0; }
     .h-points td:nth-child(5), .h-points td:nth-child(6), .h-points td:nth-child(7) { color: var(--muted); font-size: var(--fs-xs); }
     .h-points td:nth-child(5)::before { content: "측정 "; }
@@ -803,33 +919,24 @@ _TEMPLATE = r"""<!doctype html>
 </head>
 <body>
 <div class="app">
-  <aside class="side" aria-label="페이지와 측정 세션">
-    <div class="brand">StepMap <small>보도 점검 대시보드</small></div>
+  <header class="topbar">
+    <a class="logo" href="#home" aria-label="StepMap 종합 현황"><span class="logo-mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18.5c4 0 3-5 7-5s3-5 7-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="5" cy="18.5" r="2" fill="currentColor"/><circle cx="19" cy="8.5" r="2" fill="currentColor"/></svg></span><span>StepMap</span></a>
     <nav class="nav" id="nav" aria-label="페이지">
       <a href="#home" data-page="home">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 5l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5h-5v5H5a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
         <span class="full">종합 현황</span><span class="short">종합</span></a>
-      <a href="#visual" data-page="visual">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
-        <span class="full">외관 검사</span><span class="short">외관</span></a>
-      <a href="#physical" data-page="physical">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.4"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></svg>
-        <span class="full">물리적 안정성 검사</span><span class="short">안정성</span></a>
+      <a href="#detail" data-page="detail">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4.5h8M8 4.5a1.5 1.5 0 0 0-1.5 1.5v.5h11V6A1.5 1.5 0 0 0 16 4.5M6.5 6.5H5a1 1 0 0 0-1 1V20a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V7.5a1 1 0 0 0-1-1h-1.5M8 12.5l2.5 2.5L16 9.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/></svg>
+        <span class="full">검사 결과</span><span class="short">검사</span></a>
       <a href="#history" data-page="history">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         <span class="full">점검 이력</span><span class="short">이력</span></a>
     </nav>
-    <section class="session" aria-labelledby="session-title">
-      <h2 id="session-title">측정 세션</h2>
-      <dl>
-        <dt>세션</dt><dd id="s-session"></dd>
-        <dt>측정 시간</dt><dd id="s-time"></dd>
-        <dt>구간</dt><dd id="s-area"></dd>
-        <dt>로봇</dt><dd id="s-robot"></dd>
-      </dl>
-      <button type="button" class="theme-btn" id="theme-toggle"></button>
-    </section>
-  </aside>
+    <div class="tb-right">
+      <span class="tb-date" id="tb-date"></span>
+      <button type="button" class="icon-btn" id="theme-toggle" aria-label="다크 테마로 보기" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
+    </div>
+  </header>
 
   <main class="main" id="main">
     <section class="page" id="page-home" data-page="home" aria-labelledby="home-title">
@@ -856,36 +963,36 @@ _TEMPLATE = r"""<!doctype html>
           </div>
           <div class="legend" id="legend" aria-label="범례">
             <div class="lv-filter" id="lv-filter" role="group" aria-label="판정별 지점 보기">__LEVEL_FILTER__</div>
+            <span class="sep" aria-hidden="true"></span>
+            <div class="shape-legend" id="shape-legend" role="group" aria-label="마커 모양">
+              <span class="item"><svg class="shp" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6"/></svg>노면 형상</span>
+              <span class="item"><svg class="shp" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.3" y="3.3" width="9.4" height="9.4" rx="1.8" transform="rotate(45 8 8)"/></svg>흔들림</span>
+            </div>
           </div>
         </div>
         <aside class="dpanel" id="dpanel" aria-label="지점 상세"></aside>
       </div>
     </section>
 
-    <section class="page" id="page-visual" data-page="visual" aria-labelledby="visual-title" hidden>
-      <header class="page-head"><nav class="crumbs" aria-label="현재 위치"><a href="#home">종합 현황 지도</a> › <span id="v-crumb"></span></nav>
-        <h1 id="visual-title">외관 검사</h1><p class="sub">카메라로 본 단차·경사·균열 (발로만 잡은 단차 포함)</p></header>
-      <div class="v-tools">
-        <div class="tabs" id="v-tabs" role="tablist" aria-label="종류"></div>
-        <label class="toggle"><input type="checkbox" id="v-ok"> 정상 포함</label>
-      </div>
-      <div class="v-grid">
-        <div class="v-list" id="v-list" role="listbox" aria-label="외관 검사 지점"></div>
-        <article class="v-detail" id="v-detail" aria-live="polite"></article>
-      </div>
-    </section>
-    <section class="page" id="page-physical" data-page="physical" aria-labelledby="physical-title" hidden>
-      <header class="page-head"><nav class="crumbs" aria-label="현재 위치"><a href="#home">종합 현황 지도</a> › <span id="p-crumb"></span></nav>
-        <h1 id="physical-title">물리적 안정성 검사</h1><p class="sub">발 접촉으로 찾은 흔들리는 블럭 (체중이 실린 뒤 추가 침하)</p></header>
-      <div class="kpis" aria-label="물리적 안정성 지표">
-        <div class="kpi"><span class="kpi-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-dasharray="3 2.4"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></svg></span><div class="label">발로 확인한 지점</div><div class="value" id="p-k-all"></div><div class="sub">흔들림 측정</div></div>
-        <div class="kpi"><span class="kpi-ico danger" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 4 21 19.5H3z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M12 10v4.2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="16.8" r="1.1" fill="currentColor"/></svg></span><div class="label">흔들림 의심</div><div class="value" id="p-k-flag"></div><div class="sub" id="p-k-flag-sub"></div></div>
-        <div class="kpi"><span class="kpi-ico warn" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M4 20 20 4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg></span><div class="label">그중 외관 정상 <small>메모에 "외관 정상"</small></div><div class="value" id="p-k-hidden"></div><div class="sub">카메라로 찾기 어려운 지점</div></div>
-        <div class="kpi"><span class="kpi-ico ok" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div class="label">정상</div><div class="value" id="p-k-ok"></div><div class="sub" id="p-k-ok-sub"></div></div>
-      </div>
-      <div class="v-grid">
-        <div class="v-list" id="p-list" role="listbox" aria-label="흔들림 지점"></div>
-        <article class="v-detail" id="p-detail" aria-live="polite"></article>
+    <section class="page" id="page-detail" data-page="detail" aria-labelledby="detail-title" hidden>
+      <header class="page-head"><h1 id="detail-title">검사 결과</h1><p class="sub">노면 형상(카메라·발로 잰 단차·경사·균열)과 흔들림(발 접촉)</p></header>
+      <p class="d-summary" id="d-summary" aria-label="검사 요약"></p>
+      <div class="d-grid">
+        <div class="d-left">
+          <div class="tabs" id="d-tabs" role="tablist" aria-label="검사 종류"></div>
+          <div class="lv-filter" id="d-levels" role="group" aria-label="판정별 지점 보기"><button type="button" class="lv-btn" data-level="danger" aria-pressed="true"><span class="dot" aria-hidden="true"></span>위험 <span class="n" id="d-n-danger"></span></button><button type="button" class="lv-btn" data-level="warn" aria-pressed="true"><span class="dot" aria-hidden="true"></span>주의 <span class="n" id="d-n-warn"></span></button><button type="button" class="lv-btn" data-level="ok" aria-pressed="false"><span class="dot" aria-hidden="true"></span>정상 <span class="n" id="d-n-ok"></span></button></div>
+          <div class="d-list" id="d-list" role="listbox" aria-label="검사 지점"></div>
+        </div>
+        <div class="d-right">
+          <article class="v-detail" id="d-detail" aria-live="polite"></article>
+          <section class="d-loc mapcard" data-map="light" aria-labelledby="d-loc-title">
+            <h2 id="d-loc-title">위치 <small id="d-loc-sub"></small></h2>
+            <div class="d-mapbox">
+              <div id="d-map" role="img" aria-label="선택한 지점 주변 지도"></div>
+              <div id="d-plane" role="img" aria-label="선택한 지점 주변 (odom 좌표)" hidden></div>
+            </div>
+          </section>
+        </div>
       </div>
     </section>
     <section class="page" id="page-history" data-page="history" aria-labelledby="history-title" hidden>
@@ -996,13 +1103,11 @@ _TEMPLATE = r"""<!doctype html>
   // ---------------------------------------------------------------- 페이지
   const PAGES = {
     home:     { title: "종합 현황" },
-    visual:   { title: "외관 검사" },
-    physical: { title: "물리적 안정성 검사" },
+    detail:   { title: "검사 결과" },
     history:  { title: "점검 이력" },
   };
-  // 흔들림(발 접촉)은 물리적 안정성, 나머지(단차·경사·균열)는 외관 검사
-  const pageFor = (e) => (e.kind === "loose" ? "physical" : "visual");
-  const detailHref = (e) => `#${pageFor(e)}/${e.id}`;
+  // 지점 상세는 모두 검사 결과 페이지 (노면 형상·흔들림 함께)
+  const detailHref = (e) => `#detail/${e.id}`;
   // 종합 현황 지도에서 마커를 누르면 페이지를 옮기지 않고 옆 패널에 상세를 연다 (#home/<id>: 새로고침해도 유지)
   const pick = (e) => {
     if (state.sel && state.sel.id === e.id) return;  // 같은 지점: 주소가 그대로라 hashchange가 오지 않는다
@@ -1026,20 +1131,43 @@ _TEMPLATE = r"""<!doctype html>
   }
   // 지도 마커: 판정색·테두리는 지도 배경에 맞춘 값 (밝은 지도: 진한 판정색 + 진한 네이비 테두리 2px)
   const markerInner = (e, sel) =>
-    (sel ? `<circle cx="12" cy="12" r="14.5" style="fill:var(--map-bg);stroke:#0B1220;stroke-width:5"/>` +
+    (sel ? `<circle cx="12" cy="12" r="14.5" style="fill:var(--map-bg);stroke:#363236;stroke-width:5"/>` +
            `<circle cx="12" cy="12" r="14.5" style="fill:none;stroke:#FFFFFF;stroke-width:3"/>` : "") +
     KIND[e.kind].shape(`var(--m-${e.level})`, "var(--m-ring)");
-  // 묶음 배지: 가장 심한 판정의 색 + 그 판정 기호(작게) + 개수
+  // 종합 현황 지도 마커 모양: 노면 형상(단차·경사·균열)은 원, 흔들림은 마름모(45° 돌린 둥근 사각형) + 흰 발 아이콘.
+  // 색은 판정 색 (지도 배경별 --m-*). 두 모양은 면적이 비슷하다 (원 r 8 ≈ 201, 마름모 한 변 14.2 ≈ 202)
+  const homeShape = (e) => (e.kind === "loose" ? "diamond" : "circle");
+  const PAW = '<g style="fill:#FFFFFF;stroke:#363236;stroke-width:1;paint-order:stroke">' +  // 흰 발 + 차콜 얇은 테두리 (주의 노랑 위 대비)
+              '<ellipse cx="12" cy="13.7" rx="2.7" ry="2.2"/><circle cx="9.2" cy="10.6" r="1.1"/>' +
+              '<circle cx="12" cy="9.5" r="1.15"/><circle cx="14.8" cy="10.6" r="1.1"/></g>';
+  const HOME_SHAPE = {
+    circle: (c) => `<circle class="mk-circle" cx="12" cy="12" r="8" style="fill:${c};stroke:var(--m-ring);stroke-width:4;paint-order:stroke"/>`,
+    diamond: (c) => `<rect class="mk-diamond" x="4.9" y="4.9" width="14.2" height="14.2" rx="2.6" transform="rotate(45 12 12)" ` +
+                    `style="fill:${c};stroke:var(--m-ring);stroke-width:4;paint-order:stroke"/>` + PAW,
+  };
+  const homeMarkerInner = (e, sel) =>
+    (sel ? `<circle cx="12" cy="12" r="14.5" style="fill:var(--map-bg);stroke:#363236;stroke-width:5"/>` +
+           `<circle cx="12" cy="12" r="14.5" style="fill:none;stroke:#FFFFFF;stroke-width:3"/>` : "") +
+    HOME_SHAPE[homeShape(e)](`var(--m-${e.level})`);
+  const homeMarkerSvg = (e, sel, lead = "") =>
+    `<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">${lead}${homeMarkerInner(e, sel)}</svg>`;
+  // 묶음: 흰 원 + 차콜 숫자(그 판정 기호 작게) + 가장 심한 판정 색 테두리. 흔들림이 하나라도 있으면 오른쪽 위에 작은 마름모 배지
+  // (배지 색 = 묶음 안 흔들림 중 가장 심한 판정). w: 표시 상자 한 변 (원 지름 + 테두리)
   function pill(members, sel) {
     const worst = members[0].level;
     const n = members.length;
-    const w = n < 10 ? 26 : 33;
+    const d = n < 10 ? 22 : 26, w = d + 4, c = w / 2;
     const ring = sel ? "var(--m-focus)" : "var(--m-ring)";
-    // 글자: 어두운 지도는 짙은 네이비(판정색 위 5.8:1 이상), 밝은 지도는 흰색(진한 판정색 위 4.9:1 이상)
+    const loose = members.filter((e) => e.kind === "loose");
+    const badge = loose.length
+      ? `<rect class="mk-badge" x="${w - 8}" y="-1" width="7" height="7" rx="1.4" transform="rotate(45 ${w - 4.5} 2.5)" ` +
+        `style="fill:var(--m-${loose[0].level});stroke:var(--m-ring);stroke-width:3;paint-order:stroke"/>`
+      : "";
+    // 글자: 흰 원 위 차콜 (12.6:1)
     return { w, svg:
-      `<rect x="2" y="2" width="${w - 4}" height="20" rx="10" style="fill:var(--m-${worst});stroke:${ring};stroke-width:4;paint-order:stroke"/>` +
-      `<text x="${w / 2}" y="16" text-anchor="middle" style="fill:var(--m-ink);font:700 11.5px system-ui,sans-serif;letter-spacing:-0.3px">` +
-      `<tspan style="font-size:8px">${LEVEL[worst].glyph}</tspan><tspan dx="0.5">${n}</tspan></text>` };
+      `<circle class="mk-cluster" cx="${c}" cy="${c}" r="${d / 2 - 0.5}" style="fill:#FFFFFF;stroke:${sel ? ring : `var(--m-${worst})`};stroke-width:3"/>` +
+      `<text x="${c}" y="${c + 4}" text-anchor="middle" style="fill:#363236;font:600 11.5px var(--font);letter-spacing:-0.02em">` +
+      `<tspan style="font-size:8px">${LEVEL[worst].glyph}</tspan><tspan dx="0.5">${n}</tspan></text>` + badge };
   }
   const countBy = (list) => LEVELS.map((l) => list.filter((e) => e.level === l).length);
   // 사진 아이콘 (고정 마크업)
@@ -1182,7 +1310,67 @@ _TEMPLATE = r"""<!doctype html>
       `<circle cx="${cx - g.dx}" cy="${cy - g.dy}" r="2.5" style="fill:var(--map-leader);stroke:var(--map-bg);stroke-width:1.5"/>`
     : "";
 
-  // ---------------------------------------------------------------- 배경 지도 (Leaflet + OpenTopoMap)
+  // ---------------------------------------------------------------- 배경 지도 타일: CARTO 밝은 회색 → OpenTopoMap + 회색 필터 → 평면 지도
+  const TILES = [
+    { name: "carto", url: "__TILE_URL__", sub: "__TILE_SUBDOMAINS__", maxNative: __TILE_MAX_NATIVE_ZOOM__, attribution: '__TILE_ATTRIBUTION__' },
+    { name: "topo", url: "__TILE_FALLBACK_URL__", sub: "__TILE_FALLBACK_SUBDOMAINS__", maxNative: __TILE_FALLBACK_MAX_NATIVE_ZOOM__,
+      attribution: '__TILE_FALLBACK_ATTRIBUTION__' },
+  ];
+  state.tileIdx = 0;          // 지금 쓰는 제공처 (지도 세 개가 함께 쓴다)
+  state.tileChecks = {};      // 제공처별 확인 결과 (Promise<boolean>)
+  root.dataset.tiles = TILES[0].name;
+  const tileLayer = (maxZoom) => {
+    const t = TILES[state.tileIdx];
+    root.dataset.tiles = t.name;  // OpenTopoMap이면 CSS가 회색 필터를 건다
+    return L.tileLayer(t.url, { subdomains: t.sub, maxNativeZoom: t.maxNative, maxZoom, attribution: t.attribution });
+  };
+  // <img> 타일은 오류 상태(403 "Access blocked")나 대체 이미지("API KEY REQUIRED" 워터마크, 200 응답)를 그대로 그려
+  // tileerror가 나지 않는다. 지도 중심과 그 옆 타일을 직접 받아 상태코드를 보고, 두 장의 내용이 똑같으면 대체 이미지로 본다.
+  function checkTiles(map) {
+    const idx = state.tileIdx;
+    if (state.tileChecks[idx]) return state.tileChecks[idx];
+    const t = TILES[idx];
+    const z = Math.min(map.getZoom(), t.maxNative), c = map.project(map.getCenter(), z).divideBy(256).floor();
+    const tileUrl = (x, y) => L.Util.template(t.url, { s: t.sub[0], z, x, y, r: "" });
+    const same = (a, b) => {
+      if (a.byteLength !== b.byteLength) return false;
+      const u = new Uint8Array(a), w = new Uint8Array(b);
+      for (let i = 0; i < u.length; i++) if (u[i] !== w[i]) return false;
+      return true;
+    };
+    state.tileChecks[idx] = Promise.all([fetch(tileUrl(c.x, c.y)), fetch(tileUrl(c.x + 1, c.y))])
+      .then(async ([a, b]) => {
+        state.tiles.probe = a.ok ? b.status : a.status;
+        if (!a.ok || !b.ok) return `http ${state.tiles.probe}`;
+        return same(await a.arrayBuffer(), await b.arrayBuffer()) ? "placeholder" : null;
+      })
+      .catch(() => { state.tiles.probe = "network"; return "network"; });
+    return state.tileChecks[idx];
+  }
+  // 지도 하나에 타일을 붙인다. 지금 제공처가 안 되면(확인 실패·한 장도 못 받고 실패 4번·10초 동안 0장) 다음 제공처,
+  // 마지막 제공처도 안 되면 onPlane(이유). alive(): 그 지도가 아직 쓰이는지
+  function attachTiles(map, maxZoom, alive, onPlane) {
+    let layer = null, loaded = 0, failed = 0, timer = 0, attempt = 0;
+    const next = (reason, at) => {
+      if (at !== attempt || !alive()) return;
+      clearTimeout(timer);
+      if (state.tileIdx < TILES.length - 1) { state.tileIdx++; use(); } else onPlane(reason);
+    };
+    const use = () => {
+      const at = ++attempt;
+      if (layer) layer.remove();
+      loaded = failed = 0;
+      layer = tileLayer(maxZoom);
+      layer.on("tileload", () => { loaded++; if (map === state.map) state.tiles.loaded++; });
+      layer.on("tileerror", () => { failed++; if (map === state.map) state.tiles.failed++; if (!loaded && failed >= 4) next("tileerror", at); });
+      layer.addTo(map);
+      checkTiles(map).then((bad) => { if (bad) next(bad, at); });
+      timer = setTimeout(() => { if (!loaded) next("timeout", at); }, 10000);
+    };
+    use();
+  }
+
+  // ---------------------------------------------------------------- 종합 현황 지도 (Leaflet)
   let markerLayer = null;
   function startTiles() {
     const gen = ++state.gen;
@@ -1190,21 +1378,6 @@ _TEMPLATE = r"""<!doctype html>
     state.map = map;
     state.mode = "tiles";
     map.attributionControl.setPosition("bottomright");
-
-    // 타일 색은 CSS(--tile-filter)가 지도 배경(밝은: 옅은 회청색 / 어두운: 반전 네이비)에 맞춘다
-    const tiles = L.tileLayer("__TILE_URL__", {
-      subdomains: "abc",
-      maxNativeZoom: __TILE_MAX_NATIVE_ZOOM__,
-      maxZoom: 19,
-      attribution: '__TILE_ATTRIBUTION__',
-    });
-    tiles.on("tileload", () => { state.tiles.loaded++; });
-    tiles.on("tileerror", () => {
-      state.tiles.failed++;
-      // 한 장도 받지 못한 채 실패가 이어지면 odom 평면 지도로 전환
-      if (state.tiles.loaded === 0 && state.tiles.failed >= 4) fallback("tileerror");
-    });
-    tiles.addTo(map);
 
     // 이동 경로는 그리지 않는다. 지도 범위는 전체 측정 지점 기준으로 처음 한 번만 맞춘다
     // (판정 필터를 바꿔도 움직이지 않는다). 지점이 없을 때만 경로 범위를 쓴다
@@ -1221,28 +1394,8 @@ _TEMPLATE = r"""<!doctype html>
     map.on("zoomend", renderMap);
     renderMap();
 
-    // <img> 타일은 오류 상태(403 "Access blocked")나 대체 이미지("API KEY REQUIRED" 워터마크,
-    // 200 응답)를 그대로 그려 tileerror가 나지 않는다. 화면 중심과 그 옆 타일을 직접 받아
-    // 상태코드를 보고, 두 장의 내용이 똑같으면 실제 지도가 아닌 대체 이미지로 판단한다.
-    const z = Math.min(map.getZoom(), __TILE_MAX_NATIVE_ZOOM__), c = map.project(map.getCenter(), z).divideBy(256).floor();
-    const tileUrl = (x, y) => L.Util.template("__TILE_URL__", { s: "a", z, x, y });
-    const same = (a, b) => {
-      if (a.byteLength !== b.byteLength) return false;
-      const u = new Uint8Array(a), w = new Uint8Array(b);
-      for (let i = 0; i < u.length; i++) if (u[i] !== w[i]) return false;
-      return true;
-    };
-    Promise.all([fetch(tileUrl(c.x, c.y)), fetch(tileUrl(c.x + 1, c.y))])
-      .then(async ([a, b]) => {
-        if (gen !== state.gen) return;
-        state.tiles.probe = a.ok ? b.status : a.status;
-        if (!a.ok || !b.ok) return fallback(`http ${state.tiles.probe}`);
-        if (same(await a.arrayBuffer(), await b.arrayBuffer())) fallback("placeholder");
-      })
-      .catch(() => { if (gen !== state.gen) return; state.tiles.probe = "network"; fallback("network"); });
-
-    // 응답이 아예 없는 경우(네트워크 차단 등)도 전환
-    setTimeout(() => { if (gen === state.gen && state.mode === "tiles" && state.tiles.loaded === 0) fallback("timeout"); }, 10000);
+    // 타일: 지도 범위를 정한 뒤 붙인다 (제공처 확인이 지도 중심 타일을 받는다)
+    attachTiles(map, 19, () => gen === state.gen && state.mode === "tiles", (reason) => fallback(reason));
   }
 
   function leafletMarkers() {
@@ -1261,16 +1414,16 @@ _TEMPLATE = r"""<!doctype html>
       if (g.members.length === 1) {
         const sel = isSel(lead);
         m = L.marker([lead.lat, lead.lon], {
-          icon: L.divIcon({ className: "ev-marker", iconSize: [24, 24], iconAnchor: [12 - g.dx, 12 - g.dy],
-                            html: `<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">${leader(g, 12, 12)}${markerInner(lead, sel)}</svg>` }),
+          icon: L.divIcon({ className: `ev-marker ev-${homeShape(lead)}`, iconSize: [24, 24], iconAnchor: [12 - g.dx, 12 - g.dy],
+                            html: homeMarkerSvg(lead, sel, leader(g, 12, 12)) }),
           zIndexOffset: sel ? 1000 : LEVEL[lead.level].z,
         });
         m.on("click", () => pick(lead));
       } else {
         const p = pill(g.members, groupSelected(g));
         m = L.marker([lead.lat, lead.lon], {
-          icon: L.divIcon({ className: "ev-cluster", iconSize: [p.w, 24], iconAnchor: [p.w / 2 - g.dx, 12 - g.dy],
-                            html: `<svg width="${p.w}" height="24" viewBox="0 0 ${p.w} 24" aria-hidden="true">${leader(g, p.w / 2, 12)}${p.svg}</svg>` }),
+          icon: L.divIcon({ className: "ev-cluster", iconSize: [p.w, p.w], iconAnchor: [p.w / 2 - g.dx, p.w / 2 - g.dy],
+                            html: `<svg width="${p.w}" height="${p.w}" viewBox="0 0 ${p.w} ${p.w}" aria-hidden="true">${leader(g, p.w / 2, p.w / 2)}${p.svg}</svg>` }),
           zIndexOffset: LEVEL[lead.level].z + 50,
         });
         const members = g.members;
@@ -1297,8 +1450,8 @@ _TEMPLATE = r"""<!doctype html>
       const p = map.latLngToLayerPoint([e.lat, e.lon]);
       const one = { x: p.x, y: p.y, dx: g.x + R * Math.cos(a) - p.x, dy: g.y + R * Math.sin(a) - p.y, members: [e] };
       const m = L.marker([e.lat, e.lon], {
-        icon: L.divIcon({ className: "ev-marker", iconSize: [24, 24], iconAnchor: [12 - one.dx, 12 - one.dy],
-                          html: `<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">${leader(one, 12, 12)}${markerInner(e, isSel(e))}</svg>` }),
+        icon: L.divIcon({ className: `ev-marker ev-${homeShape(e)}`, iconSize: [24, 24], iconAnchor: [12 - one.dx, 12 - one.dy],
+                          html: homeMarkerSvg(e, isSel(e), leader(one, 12, 12)) }),
         zIndexOffset: 2000 + LEVEL[e.level].z,
       });
       m.on("click", () => pick(e));
@@ -1326,6 +1479,8 @@ _TEMPLATE = r"""<!doctype html>
     state.mode = null;
     state.reason = null;
     state.tiles = { loaded: 0, failed: 0 };
+    state.tileIdx = 0;      // 다시 불러오기는 첫 제공처(CARTO)부터
+    state.tileChecks = {};
     startTiles();
   });
 
@@ -1374,7 +1529,7 @@ _TEMPLATE = r"""<!doctype html>
                   `<text x="16" y="24" fill="${mapCss("--map-text")}" font-size="12">odom 좌표 · 격자 ${step} m</text>`;
 
       box.innerHTML = `<svg xmlns="${NS}" width="${W}" height="${H}">` +
-        `<g stroke="${mapCss("--map-grid")}" stroke-width="1">${g}</g>` + bar + `</svg>`;
+        `<g stroke="${mapCss("--map-grid")}" stroke-width="2">${g}</g>` + bar + `</svg>`;
 
       // 마커는 DOM으로 만든다 (이름·툴팁은 textContent/setAttribute)
       const layer = document.createElementNS(NS, "g");
@@ -1387,13 +1542,14 @@ _TEMPLATE = r"""<!doctype html>
         let activate;
         if (grp.members.length === 1) {
           const e = grp.members[0];
+          node.setAttribute("class", `ev ev-${homeShape(e)}`);
           node.setAttribute("transform", `translate(${(grp.x + grp.dx - 12).toFixed(1)},${(grp.y + grp.dy - 12).toFixed(1)})`);
-          node.innerHTML = leader(grp, 12, 12) + `<rect class="hit" x="-2" y="-2" width="28" height="28" rx="6" fill="transparent"/>` + markerInner(e, isSel(e));
+          node.innerHTML = leader(grp, 12, 12) + `<rect class="hit" x="-2" y="-2" width="28" height="28" rx="6" fill="transparent"/>` + homeMarkerInner(e, isSel(e));
           activate = () => pick(e);
         } else {
           const p = pill(grp.members, groupSelected(grp));
-          node.setAttribute("transform", `translate(${(grp.x + grp.dx - p.w / 2).toFixed(1)},${(grp.y + grp.dy - 12).toFixed(1)})`);
-          node.innerHTML = leader(grp, p.w / 2, 12) + `<rect class="hit" x="-2" y="-2" width="${p.w + 4}" height="28" rx="8" fill="transparent"/>` + p.svg;
+          node.setAttribute("transform", `translate(${(grp.x + grp.dx - p.w / 2).toFixed(1)},${(grp.y + grp.dy - p.w / 2).toFixed(1)})`);
+          node.innerHTML = leader(grp, p.w / 2, p.w / 2) + `<rect class="hit" x="-2" y="-2" width="${p.w + 4}" height="${p.w + 4}" rx="${p.w / 2 + 2}" fill="transparent"/>` + p.svg;
           const members = grp.members;
           activate = () => showPicker(members, node.getBoundingClientRect());
         }
@@ -1430,12 +1586,17 @@ _TEMPLATE = r"""<!doctype html>
     }
   }
 
-  // ---------------------------------------------------------------- 테마 (다크 기본)
+  // ---------------------------------------------------------------- 테마 (라이트 기본, 아이콘 버튼: 라이트에서 달, 다크에서 해)
+  const MOON = '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>';
+  const SUN = '<circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/>' +
+              '<path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.5 1.5M17.2 17.2l1.5 1.5M5.3 18.7l1.5-1.5M17.2 6.8l1.5-1.5" ' +
+              'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>';
   function applyTheme(t) {
     root.dataset.theme = t;
     const btn = $("theme-toggle");
-    btn.textContent = t === "dark" ? "라이트 테마로 보기" : "다크 테마로 보기";
-    btn.setAttribute("aria-pressed", String(t === "light"));
+    btn.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${t === "dark" ? SUN : MOON}</svg>`;
+    btn.setAttribute("aria-label", t === "dark" ? "라이트 테마로 보기" : "다크 테마로 보기");
+    btn.setAttribute("aria-pressed", String(t === "dark"));
     for (const f of state.themeHooks) f();
   }
   $("theme-toggle").addEventListener("click", () => {
@@ -1443,7 +1604,7 @@ _TEMPLATE = r"""<!doctype html>
     try { localStorage.setItem("stepmap-theme", next); } catch (e) { /* 저장 못 해도 이번 화면에는 적용 */ }
     applyTheme(next);
   });
-  applyTheme(root.dataset.theme === "light" ? "light" : "dark");
+  applyTheme(root.dataset.theme === "dark" ? "dark" : "light");
 
   // ---------------------------------------------------------------- 지도 배경 (밝은 지도 기본, 페이지 테마와 따로)
   const MAP_KEY = "stepmap-map";
@@ -1462,12 +1623,12 @@ _TEMPLATE = r"""<!doctype html>
   try { savedMap = localStorage.getItem(MAP_KEY); } catch (e) { /* 저장소를 못 쓰면 기본값 */ }
   applyMapStyle(savedMap === "dark" ? "dark" : "light");
 
-  // ---------------------------------------------------------------- 측정 세션 정보
-  $("s-session").textContent = DATA.session || "—";
-  $("s-session").setAttribute("title", DATA.session || "");  // 말줄임으로 잘리면 마우스를 올려 전체를 본다
-  $("s-time").textContent = DATA.t0 != null ? `${fmtDateTime(DATA.t0)} ~ ${fmtHM(DATA.t1)}` : "—";
-  $("s-area").textContent = DATA.area || "—";
-  $("s-robot").textContent = DATA.robot || "—";
+  // ---------------------------------------------------------------- 위쪽 바: 마지막 점검 날짜 (마우스를 올리면 측정 시간·구간·로봇)
+  if (DATA.t0 != null) {
+    const d = $("tb-date"), pt = tparts(DATA.t0);
+    d.append(el("span", "k", "마지막 점검 "), el("b", null, `${pt.year}.${pt.month}.${pt.day}`));
+    d.setAttribute("title", [`측정 ${fmtDateTime(DATA.t0)} ~ ${fmtHM(DATA.t1)}`, DATA.area, DATA.robot].filter(Boolean).join(" · "));
+  }
   $("home-sub").textContent = [DATA.session, DATA.area, DATA.t0 != null ? fmtDateTime(DATA.t0) : ""].filter(Boolean).join(" · ");
 
   // ---------------------------------------------------------------- KPI 공용 계산 (종합 현황 · 점검 이력이 같은 함수를 쓴다)
@@ -1502,7 +1663,7 @@ _TEMPLATE = r"""<!doctype html>
     $("k-ok-sub").textContent = `전체 ${DATA.events.length}개 중`;
   }
 
-  // ---------------------------------------------------------------- 종합 현황: 범례 (판정 필터 버튼 + 종류별 모양)
+  // ---------------------------------------------------------------- 종합 현황: 범례 (판정 필터 버튼 + 회색 모양 범례)
   function setShown(lv, on) {
     shown[lv] = on;
     if (!on && state.page === "home" && state.sel && byId[state.sel.id].level === lv) closePanel();  // 선택된 지점을 숨기면 패널도 닫는다
@@ -1512,18 +1673,11 @@ _TEMPLATE = r"""<!doctype html>
     renderMap();
   }
   {
-    const box = $("legend");
     for (const b of levelBtns) b.addEventListener("click", () => setShown(b.dataset.level, !shown[b.dataset.level]));
     $("map-empty").hidden = LEVELS.some((l) => shown[l]);
-    box.append(el("span", "sep"));
-    for (const k of KINDS) {
-      const it = el("span", "item");
-      it.append(svgIcon(k, null), el("span", null, k === "loose" ? "흔들림 (점선 고리)" : KIND[k].label));
-      box.append(it);
-    }
   }
 
-  // ---------------------------------------------------------------- 현장 사진 (외관 검사·물리적 안정성 페이지에서 사용)
+  // ---------------------------------------------------------------- 현장 사진 (검사 결과 상세·종합 현황 패널에서 사용)
   // 위치 표시(동그라미·라벨)는 Python photos.overlay_svg가 만든 SVG (신고서와 같은 함수)
   function photoView(e, onMissing, thumb = false) {
     const p = e.photo;
@@ -1572,209 +1726,106 @@ _TEMPLATE = r"""<!doctype html>
   $("photo-dlg-close").addEventListener("click", () => dlg.close());
   dlg.addEventListener("click", (ev) => { if (ev.target === dlg) dlg.close(); });  // 바깥(배경) 누르면 닫기
 
-  // ---------------------------------------------------------------- 외관 검사
-  // 대상: 흔들림을 뺀 모든 지점. 정렬은 종합 현황 목록과 같다 (위험 먼저, 같은 판정 안에서는 ratio 큰 순)
-  const V = { kind: "all", withOk: false, scrollToDetail: false };
-  const V_KINDS = ["all", "step", "slope", "crack"];
+  // ---------------------------------------------------------------- 검사 결과 (노면 형상 + 흔들림)
+  // 목록: 탭(전체/노면 형상/흔들림) × 판정 칩(처음 위험·주의). 정렬은 위험→주의→정상, 같은 판정은 ratio 큰 순
   const byIssueOrder = (a, b) => LEVEL[b.level].rank - LEVEL[a.level].rank || b.ratio - a.ratio || a.t - b.t;
-  const visualAll = DATA.events.filter((e) => e.kind !== "loose").sort(byIssueOrder);
-  const visualShown = (kind = V.kind) => visualAll.filter((e) => (kind === "all" || e.kind === kind) && (V.withOk || e.level !== "ok"));
-  // 측정 근거: 측정 방법 (종류 + 측정 센서)
+  const D_TABS = [["all", "전체"], ["surface", "노면 형상"], ["loose", "흔들림"]];
+  const levelChips = [...document.querySelectorAll("#d-levels .lv-btn")];
+  const D = { tab: "all", levels: Object.fromEntries(levelChips.map((b) => [b.dataset.level, b.getAttribute("aria-pressed") === "true"])),
+              redraw: null, scrollToDetail: false };
+  const inTab = (e, tab) => tab === "all" || (tab === "loose") === (e.kind === "loose");
+  const detailAll = [...DATA.events].sort(byIssueOrder);
+  const detailShown = (tab = D.tab) => detailAll.filter((e) => inTab(e, tab) && D.levels[e.level]);
+  const CATEGORY = (e) => (e.kind === "loose" ? "흔들림(발 접촉)" : "노면 형상");  // 신고서 측정 방식과 같은 분류
+  // 측정 방법 (종류 + 측정 센서)
   const METHOD = {
     step:  { camera: "깊이 카메라 바닥 평면 대비 높이 차", foot: "발 접지 높이 차 (다른 발 대비)",
              "camera+foot": "깊이 카메라 바닥 평면 대비 높이 차 + 발 접지 높이 차 (교차 측정)" },
     slope: { camera: "깊이 카메라 바닥 평면 기울기" },
     crack: { camera: "RGB 영상 균열 검출 점수 (0~1)" },
+    loose: { foot: "관절 각도 → 발끝 위치(정기구학), IMU 중력 정렬, 평소 걸음 대비" },
   };
   const methodText = (e) => {
     const m = (METHOD[e.kind] || {})[e.source] || e.source;
-    return e.leg && e.source !== "camera" ? `${m} · ${LEG[e.leg] || e.leg}(${e.leg})` : m;
+    return e.leg && e.source !== "camera" && e.kind !== "loose" ? `${m} · ${LEG[e.leg] || e.leg}(${e.leg})` : m;
   };
   const kindValue = (e) => `${KIND[e.kind].label} ${fmtValue(e)}`;
   const legName = (leg) => (leg ? `${LEG[leg] || leg}(${leg})` : "");
   const fmtDateTimeS = (t) => { const p = tparts(t); return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`; };
+  const ratioText = (e) => (e.kind === "crack" ? "" : ` · 기준의 ${Number(e.ratio).toFixed(1)}배`);  // 균열 점수는 배수 표시 안 함
+  // 흔들림은 ◆, 노면 형상은 종류 모양 (판정 색)
+  const kindMark = (e) => {
+    if (e.kind !== "loose") return svgIcon(e.kind, e.level);
+    const d = el("span", `dia lv-c-${e.level}`, "◆");
+    d.setAttribute("aria-hidden", "true");
+    return d;
+  };
+  const confirmBadge = (e) => (e.confirm ? el("span", `cf${e.confirm === "확정" ? " sure" : ""}`, e.confirm) : null);
 
-  function selectVisual(id) {
-    V.scrollToDetail = narrow.matches;  // 모바일: 목록 아래 상세로 내려간다
-    location.replace(`#visual/${id}`);  // 같은 페이지 안 선택은 방문 기록을 쌓지 않는다
+  // 요약 한 줄: 위험 N · 주의 N · 밟은 블록 N개 확인 (발끝 기록의 서로 다른 블록 수, events.count_stepped_blocks)
+  {
+    const box = $("d-summary");
+    for (const lv of ["danger", "warn"]) {
+      const sp = el("span", "blk"); sp.append(lvBadge(lv), document.createTextNode(` ${countLevel(DATA.events, lv)}`)); box.append(sp);
+    }
+    if (DATA.stepped_blocks != null) {
+      const sp = el("span", "blk");
+      sp.append(el("span", "dia lv-c-ok", "◆"), document.createTextNode(`밟은 블록 ${DATA.stepped_blocks.toLocaleString("ko-KR")}개 확인`));
+      sp.firstChild.setAttribute("aria-hidden", "true");
+      box.append(el("span", "sep"), sp);
+    }
   }
-  function renderVisualTabs() {
-    const box = $("v-tabs");
+  for (const b of levelChips) {
+    b.addEventListener("click", () => {
+      D.levels[b.dataset.level] = !D.levels[b.dataset.level];
+      b.setAttribute("aria-pressed", String(D.levels[b.dataset.level]));
+      refreshDetailSelection();
+    });
+  }
+  function selectDetail(id) {
+    D.scrollToDetail = narrow.matches;  // 좁은 화면: 목록 아래 상세로 내려간다
+    location.replace(`#detail/${id}`);  // 같은 페이지 안 선택은 방문 기록을 쌓지 않는다
+  }
+  // 탭·칩을 바꾼 뒤: 선택이 목록에서 빠졌으면 첫 지점을 고른다
+  function refreshDetailSelection() {
+    const list = detailShown();
+    if (state.sel && list.some((e) => e.id === state.sel.id)) renderDetailPage();
+    else if (list.length) selectDetail(list[0].id);
+    else { state.sel = null; renderDetailPage(); }
+  }
+  function renderDetailTabs() {
+    const box = $("d-tabs");
     box.replaceChildren();
-    for (const k of V_KINDS) {
+    for (const [k, label] of D_TABS) {
       const b = el("button");
       b.type = "button";
+      b.dataset.tab = k;
       b.setAttribute("role", "tab");
-      b.setAttribute("aria-selected", String(V.kind === k));
-      if (k !== "all") b.append(svgIcon(k, null));
-      b.append(el("span", null, k === "all" ? "전체" : KIND[k].label), el("span", "n", String(visualShown(k).length)));
-      b.addEventListener("click", () => { V.kind = k; refreshVisualSelection(); });
+      b.setAttribute("aria-selected", String(D.tab === k));
+      b.append(el("span", null, label), el("span", "n", String(detailShown(k).length)));
+      b.addEventListener("click", () => { D.tab = k; refreshDetailSelection(); });
       box.append(b);
     }
+    for (const lv of LEVELS) $(`d-n-${lv}`).textContent = detailAll.filter((e) => inTab(e, D.tab) && e.level === lv).length;
   }
-  // 탭·필터를 바꾼 뒤: 선택이 목록에서 빠졌으면 첫 지점을 고른다
-  function refreshVisualSelection() {
-    const list = visualShown();
-    if (state.sel && list.some((e) => e.id === state.sel.id)) renderVisual();
-    else if (list.length) selectVisual(list[0].id);
-    else { state.sel = null; renderVisual(); }
-  }
-  $("v-ok").addEventListener("change", (ev) => { V.withOk = ev.target.checked; refreshVisualSelection(); });
-
-  function renderVisualList() {
-    const box = $("v-list");
+  function renderDetailList() {
+    const box = $("d-list");
     box.replaceChildren();
-    const list = visualShown();
+    const list = detailShown();
     if (!list.length) { box.append(el("div", "v-empty", "조건에 맞는 지점이 없습니다")); return; }
     for (const e of list) {
-      const b = el("button", "v-row");
+      const b = el("button", `d-row lv-c-${e.level}`);
       b.type = "button";
       b.setAttribute("role", "option");
       b.setAttribute("aria-selected", String(isSel(e)));
-      const th = el("span", "v-thumb");
-      if (e.photo) {
-        const img = el("img");
-        img.src = e.photo.src;
-        img.alt = "";
-        img.loading = "lazy";
-        img.addEventListener("error", () => th.replaceChildren(svgIcon(e.kind, e.level)));
-        th.append(img);
-      } else {
-        th.append(svgIcon(e.kind, e.level));
-      }
-      const body = el("span");
-      const l1 = el("span", "l1");
-      l1.append(lvBadge(e.level), el("span", null, KIND[e.kind].label), el("span", "val", fmtValue(e)));
-      body.append(l1);
-      if (e.note) body.append(el("span", "nt", e.note));
-      body.append(el("span", "tm", `${fmtDateTimeS(e.t).slice(11)} · ${e.id}`));
-      for (const s of body.children) s.style.display = s.classList.contains("l1") ? "" : "block";
-      b.append(th, body);
-      b.setAttribute("aria-label", `${LEVEL[e.level].label} ${kindValue(e)}${e.note ? `, ${e.note}` : ""}`);
-      b.addEventListener("click", () => selectVisual(e.id));
-      box.append(b);
-    }
-  }
-
-  function card(k, v, s, cls) {
-    const c = el("div", `v-card${cls ? ` ${cls}` : ""}`);
-    c.append(el("div", "k", k), el("div", "v", v));
-    if (s) c.append(el("div", "s", s));
-    return c;
-  }
-  function renderVisualDetail() {
-    const box = $("v-detail");
-    box.replaceChildren();
-    const e = state.sel && byId[state.sel.id];
-    if (!e) { box.append(el("p", "v-empty", "목록에서 지점을 고르세요")); return; }
-    const head = el("div", "v-head");
-    const kind = el("span", "kind");
-    kind.append(svgIcon(e.kind, e.level), el("span", null, KIND[e.kind].label), lvBadge(e.level));
-    const inReport = e.level !== "ok";
-    head.append(kind, el("span", `rep${inReport ? " in" : ""}`, inReport ? "신고서에 포함됨" : "신고서 대상 아님 (정상)"));
-    box.append(head);
-
-    // 사진 크게 (누르면 크게 보기). 없으면 사진 자리에 안내만
-    if (e.photo) box.append(photoFigure(e));
-    else { const np = el("div", "no-photo"); np.append(svgIcon(e.kind, null), el("span", null, "사진 없음")); box.append(np); }
-
-    const big = el("div", "v-big");
-    big.append(el("span", "num", fmtNum(e.value, e.unit)), el("span", "unit", e.unit === "score" ? "균열 점수 (0~1)" : UNIT[e.unit]));
-    const crit = el("p", "v-crit");
-    crit.append(el("span", "k", "기준 "), document.createTextNode(criterion(e)));
-    if (e.kind !== "crack") crit.append(el("span", "x", ` · 기준의 ${Number(e.ratio).toFixed(1)}배`));  // 균열 점수는 배수 표시 안 함
-    box.append(big, crit);
-
-    if (e.source === "camera+foot") {
-      const d = Number(e.value_foot) - Number(e.value);
-      const cards = el("div", "v-cards");
-      cards.append(card("카메라", fmtValue(e)),
-                   card(`발 · ${legName(e.leg)}`, fmtFoot(e)),
-                   card("두 측정 차이", `${Math.abs(d).toFixed(1)}${UNIT[e.unit]}`, d === 0 ? "두 값 같음" : `발 측정이 ${d > 0 ? "더 큼" : "더 작음"}`, "diff"));
-      box.append(cards);
-    }
-
-    const basis = el("section", "v-basis");
-    basis.append(el("h2", null, "측정 근거"));
-    const dl = el("dl");
-    const row = (k, v) => dl.append(el("dt", null, k), el("dd", null, v));
-    row("측정 방법", methodText(e));
-    row("위도·경도", `${Number(e.lat).toFixed(6)}, ${Number(e.lon).toFixed(6)}`);
-    row("측정 시각", fmtDateTimeS(e.t));
-    row("메모", e.note || "—");
-    row("신뢰도", Number(e.confidence).toFixed(2));
-    row("ID", e.id);
-    basis.append(dl);
-    box.append(basis);
-
-    const act = el("div", "v-actions");
-    const toMap = el("button", "btn primary", "지도에서 위치 보기");
-    toMap.type = "button";
-    toMap.addEventListener("click", () => { location.hash = `#home/${e.id}`; });
-    act.append(toMap);
-    box.append(act);
-  }
-  function renderVisual() {
-    $("v-ok").checked = V.withOk;
-    renderVisualTabs();
-    renderVisualList();
-    renderVisualDetail();
-    const e = state.sel && byId[state.sel.id];
-    $("v-crumb").textContent = e ? `${kindValue(e)} (${e.id})` : "외관 검사";
-    const row = document.querySelector('#v-list .v-row[aria-selected="true"]');
-    if (row) row.scrollIntoView({ block: "nearest" });
-    if (V.scrollToDetail && e) $("v-detail").scrollIntoView({ block: "start", behavior: reduceMotion.matches ? "auto" : "smooth" });
-    V.scrollToDetail = false;
-  }
-
-  // ---------------------------------------------------------------- 물리적 안정성 검사
-  // 대상: 흔들림(발 접촉) 지점. 정렬은 종합 현황 목록과 같다
-  const physicalAll = DATA.events.filter((e) => e.kind === "loose").sort(byIssueOrder);
-  const P = { scrollToDetail: false, redraw: null };
-  {
-    const n = (lv) => physicalAll.filter((e) => e.level === lv).length;
-    $("p-k-all").textContent = physicalAll.length;
-    $("p-k-flag").textContent = n("danger") + n("warn");
-    for (const lv of ["danger", "warn"]) {
-      const s = el("span"); s.append(lvBadge(lv), document.createTextNode(` ${n(lv)}`)); $("p-k-flag-sub").append(s);
-    }
-    $("p-k-hidden").textContent = physicalAll.filter((e) => e.level !== "ok" && (e.note || "").includes("외관 정상")).length;
-    $("p-k-ok").textContent = n("ok");
-    $("p-k-ok-sub").textContent = `추가 침하 ${DATA.thresholds.loose[0]}mm 미만`;
-  }
-  function selectPhysical(id) {
-    P.scrollToDetail = narrow.matches;
-    location.replace(`#physical/${id}`);
-  }
-  function renderPhysicalList() {
-    const box = $("p-list");
-    box.replaceChildren();
-    for (const e of physicalAll) {
-      const b = el("button", "v-row");
-      b.type = "button";
-      b.setAttribute("role", "option");
-      b.setAttribute("aria-selected", String(isSel(e)));
-      const th = el("span", "v-thumb");
-      if (e.photo) {
-        const img = el("img");
-        img.src = e.photo.src;
-        img.alt = "";
-        img.loading = "lazy";
-        img.addEventListener("error", () => th.replaceChildren(svgIcon(e.kind, e.level)));
-        th.append(img);
-      } else {
-        th.append(svgIcon(e.kind, e.level));
-      }
-      const body = el("span");
-      const l1 = el("span", "l1");
-      l1.append(lvBadge(e.level), el("span", "val", fmtValue(e)), el("span", null, legName(e.leg)));
-      body.append(l1);
-      if (e.note) body.append(el("span", "nt", e.note));
-      body.append(el("span", "tm", `${fmtDateTimeS(e.t).slice(11)} · ${e.id}`));
-      for (const s of body.children) s.style.display = s.classList.contains("l1") ? "" : "block";
-      b.append(th, body);
-      b.setAttribute("aria-label", `${LEVEL[e.level].label} ${kindValue(e)} ${legName(e.leg)}${e.note ? `, ${e.note}` : ""}`);
-      b.addEventListener("click", () => selectPhysical(e.id));
+      const dot = el("span", "lvd");
+      dot.setAttribute("aria-hidden", "true");
+      const what = el("span", "what");
+      what.append(el("span", null, KIND[e.kind].label), el("span", "val", fmtValue(e)));
+      const cf = confirmBadge(e);
+      b.append(dot, kindMark(e), what, cf || el("span"), el("span", "why", `${criterion(e)}${ratioText(e)}`));
+      b.setAttribute("aria-label", `${LEVEL[e.level].label} ${kindValue(e)}${e.confirm ? ` ${e.confirm}` : ""}, 기준 ${criterion(e)}${ratioText(e)}`);
+      b.addEventListener("click", () => selectDetail(e.id));
       box.append(b);
     }
   }
@@ -1805,7 +1856,7 @@ _TEMPLATE = r"""<!doctype html>
       // 값 상자 (참고 그림의 빨간 테두리 상자)와 범례: 그래프 위쪽 여백 띠에 두어 데이터를 가리지 않는다
       const vb1 = `접지 높이: 평소보다 ${signed(tr.contact)} mm`, vb2 = `체중이 실린 뒤 추가 침하: ${fmt1(tr.extra)} mm`;
       const vw = Math.ceil(Math.max(textW(vb1, fs), textW(vb2, fs)) * 1.04 + 22), vh = Math.round(fs * 2 + 18);
-      const items = [[`평소 걸음 범위 (${tr.n}걸음)`, "band"], ["평소 걸음 평균", "mean"], [`이번 걸음 (${flagged ? "흔들림 의심" : "정상 범위"})`, "step"]];
+      const items = [[`평소 걸음 범위 (${tr.n}걸음)`, "band"], ["평소 걸음 평균", "mean"], [`이번 걸음 (${flagged ? "기준 초과" : "정상 범위"})`, "step"]];
       const lh = Math.round(fs + 9), legH = items.length * lh + 8;
       const lw = Math.ceil(Math.max(...items.map(([t]) => textW(t, fs))) * 1.04 + 48);
       const oneRow = vw + lw + 24 <= PW;
@@ -1874,64 +1925,102 @@ _TEMPLATE = r"""<!doctype html>
     };
     fig.append(box, el("figcaption", null,
       `높이 0mm = 평소 걸음이 딛고 있을 때의 평균 높이. 추가 침하는 접지 직후 내려오는 구간을 빼고, 발이 멈춘 뒤(접지 후 ${tr.t_settle.toFixed(2)}초)부터 계산`));
-    P.redraw = draw;
+    D.redraw = draw;
     requestAnimationFrame(draw);
     return fig;
   }
-  addEventListener("resize", () => { if (state.page === "physical" && P.redraw) requestAnimationFrame(P.redraw); });
+  addEventListener("resize", () => { if (state.page === "detail" && D.redraw) requestAnimationFrame(D.redraw); });
 
-  function renderPhysicalDetail() {
-    const box = $("p-detail");
+  function card(k, v, s, cls) {
+    const c = el("div", `v-card${cls ? ` ${cls}` : ""}`);
+    c.append(el("div", "k", k), el("div", "v", v));
+    if (s) c.append(el("div", "s", s));
+    return c;
+  }
+
+  function renderDetailCard() {
+    const box = $("d-detail");
     box.replaceChildren();
-    P.redraw = null;
+    D.redraw = null;
     const e = state.sel && byId[state.sel.id];
     if (!e) { box.append(el("p", "v-empty", "목록에서 지점을 고르세요")); return; }
+    const loose = e.kind === "loose";
+    // 공통: 판정 배지 + 종류 + id
     const head = el("div", "v-head");
     const kind = el("span", "kind");
-    kind.append(svgIcon(e.kind, e.level), el("span", null, KIND[e.kind].label), lvBadge(e.level));
+    kind.append(lvBadge(e.level), kindMark(e), el("span", null, KIND[e.kind].label), el("span", "id", e.id));
+    const cf = confirmBadge(e);
+    if (cf) kind.append(cf);
     const inReport = e.level !== "ok";
     head.append(kind, el("span", `rep${inReport ? " in" : ""}`, inReport ? "신고서에 포함됨" : "신고서 대상 아님 (정상)"));
     box.append(head);
 
-    // 사진 (image_mark 점선 동그라미 + "외관 정상, 발 접촉으로 확인" 설명은 기존 함수). 없으면 안내만
+    // 사진 (흔들림은 image_mark 점선 동그라미). 누르면 크게 보기, 없으면 사진 자리에 안내만
     if (e.photo) box.append(photoFigure(e));
     else { const np = el("div", "no-photo"); np.append(svgIcon(e.kind, null), el("span", null, "사진 없음")); box.append(np); }
 
+    // 측정값(크게) + 근거 (criterion_text, exceed_ratio)
     const big = el("div", "v-big");
-    big.append(el("span", "num", fmtNum(e.value, e.unit)), el("span", "unit", UNIT[e.unit]));
+    big.append(el("span", "num", fmtNum(e.value, e.unit)),
+               el("span", "unit", e.unit === "score" ? "균열 점수 (0~1)" : loose ? `${UNIT[e.unit]} 추가 침하` : UNIT[e.unit]));
     const crit = el("p", "v-crit");
-    crit.append(el("span", "k", "기준 "), document.createTextNode(criterion(e)), el("span", "x", ` · 기준의 ${Number(e.ratio).toFixed(1)}배`));
-    box.append(big, crit, footGraph(e));
+    crit.append(el("span", "k", "기준 "), document.createTextNode(criterion(e)));
+    if (ratioText(e)) crit.append(el("span", "x", ratioText(e)));
+    box.append(big, crit);
 
+    if (e.source === "camera+foot") {  // 노면 형상: 카메라·발 교차 측정
+      const d = Number(e.value_foot) - Number(e.value);
+      const cards = el("div", "v-cards");
+      cards.append(card("카메라", fmtValue(e)),
+                   card(`발 · ${legName(e.leg)}`, fmtFoot(e)),
+                   card("두 측정 차이", `${Math.abs(d).toFixed(1)}${UNIT[e.unit]}`, d === 0 ? "두 값 같음" : `발 측정이 ${d > 0 ? "더 큼" : "더 작음"}`, "diff"));
+      box.append(cards);
+    }
+    if (loose) {  // 흔들림: 밟은 횟수 · 추가 침하 · 확정/의심 + 발끝 높이 그래프
+      const steps = e.steps || [];
+      const n = Math.max(steps.length, 1);
+      const cards = el("div", "v-cards");
+      cards.append(card("밟은 횟수", `${n}회`, steps.length ? steps.map((x) => `${x.leg} ${x.extra.toFixed(1)}mm`).join(" · ") : legName(e.leg)),
+                   card("추가 침하", `${fmtNum(e.value, e.unit)}mm`, `기준 ${DATA.thresholds.loose[0]}mm 이상이면 흔들림`),
+                   card("판정", e.confirm || "정상", e.confirm === "확정" ? "2걸음 이상 기준 초과" : e.confirm === "의심" ? "1걸음만 기준 초과" : "기준 초과 걸음 없음",
+                        e.confirm ? "diff" : ""));
+      box.append(cards, footGraph(e));
+    }
+
+    // 공통: 위치·측정 시각·측정 방식 (+ 메모·신뢰도·다리)
     const basis = el("section", "v-basis");
     basis.append(el("h2", null, "측정 근거"));
     const dl = el("dl");
     const row = (k, v) => dl.append(el("dt", null, k), el("dd", null, v));
-    row("측정 방법", "관절 각도 → 발끝 위치(정기구학), IMU 중력 정렬, 평소 걸음 대비");
-    row("측정 다리", legName(e.leg) || "—");
-    row("평소 걸음 수", e.trace ? `${e.trace.n}걸음` : "—");
     row("위도·경도", `${Number(e.lat).toFixed(6)}, ${Number(e.lon).toFixed(6)}`);
     row("측정 시각", fmtDateTimeS(e.t));
-    if (e.note) row("메모", e.note);
-    row("ID", e.id);
+    row("측정 방식", `${CATEGORY(e)} · ${methodText(e)}`);
+    if (loose) {
+      row("측정 다리", legName(e.leg) || "—");
+      row("평소 걸음 수", e.trace ? `${e.trace.n}걸음` : "—");
+    } else {
+      row("신뢰도", Number(e.confidence).toFixed(2));
+    }
+    row("메모", e.note || "—");
     basis.append(dl);
     box.append(basis);
 
-    // 외관 검사 비교: 1m 안의 외관 이상 지점
-    const near = el("section", "p-near");
-    near.append(el("h2", null, "외관 검사 비교"));
-    const ids = e.near_visual || [];
-    if (!ids.length) near.append(el("p", null, "1m 안에 외관 이상 지점 없음 · 카메라로는 이상 없음"));
-    else {
-      const ul = el("ul");
-      for (const i of ids) {
-        const o = byId[i], a = el("a", null, `${kindValue(o)} · ${LEVEL[o.level].label} (${o.id})`);
-        a.href = `#visual/${o.id}`;
-        const li = el("li"); li.append(a); ul.append(li);
+    if (loose) {  // 흔들림: 1m 안의 노면 형상 이상과 비교 (카메라로는 안 보이는 흔들림인지)
+      const near = el("section", "d-near");
+      near.append(el("h2", null, "주변 노면 형상 비교"));
+      const ids = e.near_visual || [];
+      if (!ids.length) near.append(el("p", null, "1m 안에 노면 형상 이상 없음 · 카메라로는 이상 없음"));
+      else {
+        const ul = el("ul");
+        for (const i of ids) {
+          const o = byId[i], a = el("a", null, `${kindValue(o)} · ${LEVEL[o.level].label} (${o.id})`);
+          a.href = detailHref(o);
+          const li = el("li"); li.append(a); ul.append(li);
+        }
+        near.append(el("p", null, "1m 안의 노면 형상 이상:"), ul);
       }
-      near.append(el("p", null, "1m 안의 외관 이상 지점:"), ul);
+      box.append(near);
     }
-    box.append(near);
 
     const act = el("div", "v-actions");
     const toMap = el("button", "btn primary", "지도에서 위치 보기");
@@ -1940,15 +2029,100 @@ _TEMPLATE = r"""<!doctype html>
     act.append(toMap);
     box.append(act);
   }
-  function renderPhysical() {
-    renderPhysicalList();
-    renderPhysicalDetail();
+
+  // 상세 아래 작은 위치 지도: 선택한 지점(크게) + 같은 날 다른 지점(작은 점). 타일을 못 받으면 평면 그림
+  const DM = { mode: null, map: null, layer: null, tiles: { loaded: 0, failed: 0 } };
+  // 밟은 블록 칸 (검사 범위): 선택 지점 둘레 BLOCK_NEAR_M 안의 칸 모서리 [x0, y0, x1, y1] (odom)
+  const BLOCK_NEAR_M = 30;
+  function nearBlocks(e) {
+    const B = DATA.blocks;
+    if (!B) return [];
+    const out = [];
+    for (const [i, j] of B.ij) {
+      const x0 = i * B.size, y0 = j * B.size;
+      if (Math.abs(x0 - e.x) <= BLOCK_NEAR_M && Math.abs(y0 - e.y) <= BLOCK_NEAR_M) out.push([x0, y0, x0 + B.size, y0 + B.size]);
+    }
+    return out;
+  }
+  const xyToLatLng = (x, y) => { const g = DATA.blocks.geo; return [g[0] + g[1] * x + g[2] * y, g[3] + g[4] * x + g[5] * y]; };
+  function drawDetailMap() {
     const e = state.sel && byId[state.sel.id];
-    $("p-crumb").textContent = e ? `${kindValue(e)} (${e.id})` : "물리적 안정성 검사";
-    const row = document.querySelector('#p-list .v-row[aria-selected="true"]');
+    if ($("page-detail").hidden) return;
+    $("d-loc-sub").textContent = e ? `${Number(e.lat).toFixed(6)}, ${Number(e.lon).toFixed(6)}${DATA.blocks ? " · 회색 칸 = 밟은 블록 (검사 범위)" : ""}` : "";
+    if (!DM.mode) {
+      if (!window.L || state.mode === "plane" || HM.mode === "plane") DM.mode = "plane";
+      else {
+        DM.mode = "tiles";
+        const map = L.map("d-map", { zoomControl: true, scrollWheelZoom: false, maxZoom: 22 });
+        map.attributionControl.setPosition("bottomright");
+        DM.map = map;
+        DM.pendingTiles = true;  // 타일은 선택 지점으로 범위를 정한 뒤 붙인다
+      }
+    }
+    $("d-map").hidden = DM.mode !== "tiles";
+    $("d-plane").hidden = DM.mode !== "plane";
+    if (DM.mode === "plane") { drawDetailPlane(e); return; }
+    if (!e) return;
+    const map = DM.map;
+    map.invalidateSize({ animate: false });
+    map.setView([e.lat, e.lon], 21, { animate: false });  // 0.3 m 칸이 약 5 px로 보이는 배율
+    if (DM.pendingTiles) {
+      DM.pendingTiles = false;
+      attachTiles(map, 22, () => DM.map === map, () => detailPlane());
+    }
+    if (DM.layer) DM.layer.remove();
+    DM.layer = L.layerGroup().addTo(map);
+    if (DATA.blocks && DATA.blocks.geo) {  // 밟은 블록: 옅은 회색 칸들을 도형 하나로 (마커보다 아래)
+      const rings = nearBlocks(e).map(([x0, y0, x1, y1]) => [xyToLatLng(x0, y0), xyToLatLng(x1, y0), xyToLatLng(x1, y1), xyToLatLng(x0, y1)]);
+      if (rings.length) L.polygon(rings, { className: "d-blk", interactive: false }).addTo(DM.layer);
+    }
+    for (const o of DATA.events) {
+      if (o.id === e.id) continue;
+      L.circleMarker([o.lat, o.lon], { radius: 4, className: `d-dot d-dot-${o.level}`, interactive: false }).addTo(DM.layer);
+    }
+    L.marker([e.lat, e.lon], { icon: L.divIcon({ className: "ev-marker", iconSize: [24, 24],
+                                                 html: `<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">${markerInner(e, true)}</svg>` }),
+                               interactive: false, keyboard: false, zIndexOffset: 1000 }).addTo(DM.layer);
+  }
+  function detailPlane() {
+    if (DM.mode === "plane") return;
+    if (DM.map) { DM.map.remove(); DM.map = null; }
+    DM.mode = "plane";
+    drawDetailMap();
+  }
+  // 평면 그림: 선택한 지점 둘레 ±DPLANE_M m (odom 좌표, 0.3 m 칸이 보이는 크기)
+  const DPLANE_M = 6;
+  function drawDetailPlane(e) {
+    const box = $("d-plane"), W = box.clientWidth, Ht = box.clientHeight;
+    box.replaceChildren();
+    if (!e || W < 80 || Ht < 80) return;
+    const k = Math.min(W, Ht) / (2 * DPLANE_M);
+    const X = (x) => W / 2 + (x - e.x) * k, Y = (y) => Ht / 2 - (y - e.y) * k;
+    let out = `<svg xmlns="${SVGNS}" width="${W}" height="${Ht}">` +
+              `<text x="12" y="${Ht - 12}" style="fill:var(--map-text);font:12px var(--font)">odom 좌표 · 가로 ${Math.round(W / k)} m</text>`;
+    for (const [x0, y0, x1, y1] of nearBlocks(e)) {
+      out += `<rect x="${X(x0).toFixed(1)}" y="${Y(y1).toFixed(1)}" width="${((x1 - x0) * k).toFixed(1)}" height="${((y1 - y0) * k).toFixed(1)}" class="d-blk"/>`;
+    }
+    for (const o of DATA.events) {
+      if (o.id === e.id) continue;
+      const x = X(o.x), y = Y(o.y);
+      if (x < -10 || x > W + 10 || y < -10 || y > Ht + 10) continue;
+      out += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" style="fill:var(--m-${o.level});stroke:var(--m-ring);stroke-width:1.5"/>`;
+    }
+    out += `<g transform="translate(${(W / 2 - 12).toFixed(1)},${(Ht / 2 - 12).toFixed(1)})">${markerInner(e, true)}</g></svg>`;
+    box.innerHTML = out;
+  }
+
+  function renderDetailPage() {
+    renderDetailTabs();
+    renderDetailList();
+    renderDetailCard();
+    drawDetailMap();
+    const e = state.sel && byId[state.sel.id];
+    const row = document.querySelector('#d-list .d-row[aria-selected="true"]');
     if (row) row.scrollIntoView({ block: "nearest" });
-    if (P.scrollToDetail && e) $("p-detail").scrollIntoView({ block: "start", behavior: reduceMotion.matches ? "auto" : "smooth" });
-    P.scrollToDetail = false;
+    if (D.scrollToDetail && e) $("d-detail").scrollIntoView({ block: "start", behavior: reduceMotion.matches ? "auto" : "smooth" });
+    D.scrollToDetail = false;
   }
 
   // ---------------------------------------------------------------- 종합 현황: 지도 옆 상세 패널
@@ -1998,7 +2172,7 @@ _TEMPLATE = r"""<!doctype html>
     const big = el("div", "v-big");
     big.append(el("span", "num", fmtNum(e.value, e.unit)), el("span", "unit", e.unit === "score" ? "균열 점수 (0~1)" : UNIT[e.unit]));
     box.append(big);
-    // d. 근거: criterion_text + exceed_ratio (외관 검사 상세와 같은 문구, 균열 점수는 배수 표시 안 함)
+    // d. 근거: criterion_text + exceed_ratio (검사 결과 상세와 같은 문구, 균열 점수는 배수 표시 안 함)
     const crit = el("p", "v-crit");
     if (ok) crit.textContent = "기준 이내";
     else {
@@ -2017,11 +2191,11 @@ _TEMPLATE = r"""<!doctype html>
     }
     info.append(dl);
     box.append(info);
-    // g. 자세히 보기: 흔들림은 물리적 안정성, 나머지는 외관 검사
+    // g. 자세히 보기: 검사 결과 페이지
     const act = el("div", "dp-actions");
     const more = el("a", "btn primary", "자세히 보기");
     more.href = detailHref(e);
-    more.setAttribute("aria-label", `자세히 보기 (${PAGES[pageFor(e)].title})`);
+    more.setAttribute("aria-label", `자세히 보기 (${PAGES.detail.title})`);
     act.append(more);
     box.append(act);
   }
@@ -2212,7 +2386,7 @@ _TEMPLATE = r"""<!doctype html>
   const hOpen = (e) => { hideTip(); location.hash = detailHref(e); };
   const hTip = (e, newest) => ({
     lines: [`${KIND[e.kind].label} ${fmtValue(e)} · ${LEVEL[e.level].label}`, `기준 ${criterion(e)}`, e.id],
-    hint: newest ? `클릭 → ${PAGES[pageFor(e)].title}` : "상세 페이지는 가장 최근 점검만",
+    hint: newest ? `클릭 → ${PAGES.detail.title}` : "상세 페이지는 가장 최근 점검만",
   });
   // 경로 위 글자 자리 (마커와 겹치지 않게 경로 바깥쪽). d: 화면 방향 [오른쪽, 위쪽]
   // 눈금: 가로 구간이면 위, 세로 구간이면 오른쪽. 출발·도착: 경로가 이어지는 반대쪽
@@ -2235,13 +2409,8 @@ _TEMPLATE = r"""<!doctype html>
     const map = L.map("h-map", { zoomControl: false });
     L.control.zoom({ position: "topright" }).addTo(map);  // 왼쪽 위는 "이동경로" 버튼 자리
     map.attributionControl.setPosition("bottomright");
-    const tiles = L.tileLayer("__TILE_URL__", { subdomains: "abc", maxNativeZoom: __TILE_MAX_NATIVE_ZOOM__, maxZoom: 19,
-                                                attribution: '__TILE_ATTRIBUTION__' });
-    tiles.on("tileload", () => { HM.tiles.loaded++; });
-    tiles.on("tileerror", () => { HM.tiles.failed++; if (!HM.tiles.loaded && HM.tiles.failed >= 4) hPlane(); });
-    tiles.addTo(map);
     HM.map = map;
-    setTimeout(() => { if (HM.mode === "tiles" && !HM.tiles.loaded) hPlane(); }, 10000);
+    HM.pendingTiles = true;  // 타일은 그날 경로로 범위를 정한 뒤 붙인다 (drawHMap)
   }
   function hPlane() {
     if (HM.mode === "plane") return;
@@ -2263,6 +2432,10 @@ _TEMPLATE = r"""<!doctype html>
       const pts = r.ll.length ? r.ll : evs.map((e) => [e.lat, e.lon]);
       if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.05)); else map.setView([33.4886, 126.4890], 16);
       HM.fitted = H.date;
+    }
+    if (HM.pendingTiles) {
+      HM.pendingTiles = false;
+      attachTiles(map, 19, () => HM.map === map, () => hPlane());
     }
     if (HM.layers) HM.layers.remove();
     if (HM.routeLayer) HM.routeLayer.remove();
@@ -2353,10 +2526,10 @@ _TEMPLATE = r"""<!doctype html>
       const end = (q, side, fill, text) => {
         const x = X(q[0]), y = Y(q[1]);
         return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5.5" style="fill:${fill};stroke:#FFFFFF;stroke-width:3"/>` +
-               `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="7.5" style="fill:none;stroke:#0B1220;stroke-width:1.5"/>` + tag(x, y, side, 12, text, 11.5, 750);
+               `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="7.5" style="fill:none;stroke:#363236;stroke-width:1.5"/>` + tag(x, y, side, 12, text, 11.5, 750);
       };
       out += end(r.xy[0], sd.start, "var(--h-route)", "출발") +
-             end(r.xy[r.xy.length - 1], sd.end, "#0B1220", `도착 ${dateMeters(H.date).toLocaleString("ko-KR")} m`);
+             end(r.xy[r.xy.length - 1], sd.end, "#363236", `도착 ${dateMeters(H.date).toLocaleString("ko-KR")} m`);
     }
     box.innerHTML = out + "</svg>";
     const layer = document.createElementNS(SVGNS, "g");
@@ -2470,10 +2643,9 @@ _TEMPLATE = r"""<!doctype html>
     for (const e of rows) {
       const tr = el("tr");
       const kind = el("span", "kind"); kind.append(svgIcon(e.kind, e.level), el("span", null, KIND[e.kind].label));
-      const target = pageFor(e);
-      // 상세 페이지는 가장 최근 점검만: 지난 날짜는 이동 링크 없이 "—"
-      const go = newest ? el("a", "go", `${PAGES[target].title} →`) : el("span", "tm", "—");
-      if (newest) go.href = `#${target}/${e.id}`;
+      // 상세 페이지는 가장 최근 점검만: 지난 날짜는 이동 링크 없이 "—" (방문 기록에 남겨 뒤로 가기 → #history/<날짜>)
+      const go = newest ? el("a", "go", `${PAGES.detail.title} →`) : el("span", "tm", "—");
+      if (newest) go.href = detailHref(e);
       const tm = el("span", null, fmtMDHMS(e.t));
       tm.title = `${fmtDateTimeS(e.t)} · ${e.id}`;
       tr.append(cell("판정", null, lvBadge(e.level)), cell("종류", null, kind), cell("값", "num", el("span", null, fmtValue(e))),
@@ -2497,27 +2669,30 @@ _TEMPLATE = r"""<!doctype html>
 
   function route() {
     const [rawPage, rawId] = location.hash.replace(/^#/, "").split("/");
-    const page = Object.prototype.hasOwnProperty.call(PAGES, rawPage) ? rawPage : "home";
-    let id = rawId && byId[rawId] ? rawId : null;
-    if (page === "visual") {
-      if (id && byId[id].kind === "loose") id = null;  // 흔들림은 외관 검사 대상이 아니다
-      if (id) {
-        // 고른 지점이 탭·필터에 걸려 안 보이면 보이게 맞춘다
-        const e = byId[id];
-        if (V.kind !== "all" && V.kind !== e.kind) V.kind = "all";
-        if (e.level === "ok") V.withOk = true;
-      } else {
-        const first = visualShown()[0] || visualAll[0];  // 선택 없이 들어오면 목록 첫 지점
-        if (first) { if (first.level === "ok") V.withOk = true; location.replace(`#visual/${first.id}`); return; }
-      }
+    // 예전 주소(#visual/<id>, #physical/<id>)는 검사 결과로 연다
+    if (rawPage === "visual" || rawPage === "physical") {
+      location.replace(rawId && byId[rawId] ? `#detail/${rawId}` : "#detail");
+      return;
     }
-    if (page === "physical" && !(id && byId[id].kind === "loose")) {
-      if (physicalAll.length) { location.replace(`#physical/${physicalAll[0].id}`); return; }  // 선택 없이 들어오면 첫 지점
-      id = null;
+    const page = Object.prototype.hasOwnProperty.call(PAGES, rawPage) ? rawPage : "home";
+    const id = rawId && byId[rawId] ? rawId : null;
+    if (page === "detail") {
+      if (id) {
+        // 고른 지점이 탭·칩에 걸려 안 보이면 보이게 맞춘다
+        const e = byId[id];
+        if (!inTab(e, D.tab)) D.tab = "all";
+        if (!D.levels[e.level]) {
+          D.levels[e.level] = true;
+          levelChips.find((b) => b.dataset.level === e.level)?.setAttribute("aria-pressed", "true");
+        }
+      } else {
+        const first = detailShown()[0] || detailAll[0];  // 선택 없이 들어오면 목록 첫 지점
+        if (first) { location.replace(`#detail/${first.id}`); return; }
+      }
     }
     if (page === "history" && NEWEST && !DATE_BY[rawId]) { location.replace(`#history/${NEWEST}`); return; }
     const changed = page !== state.page;
-    const fromOtherPage = !!state.page && state.page !== "home";  // 외관·물리적 안정성의 "지도에서 위치 보기"
+    const fromOtherPage = !!state.page && state.page !== "home";  // 검사 결과의 "지도에서 위치 보기"
     state.page = page;
     state.sel = id ? { id } : null;
     hideTip();
@@ -2538,8 +2713,7 @@ _TEMPLATE = r"""<!doctype html>
       if (state.map) state.map.invalidateSize({ animate: false });  // 패널 높이·배치가 바뀌면 지도 크기를 다시 잰다
     }
     state.pickedOnMap = false;
-    if (page === "visual") renderVisual();
-    if (page === "physical") renderPhysical();
+    if (page === "detail") renderDetailPage();
     if (page === "history") { H.date = rawId || NEWEST; closeCal(); renderHistory(); }
     if (changed) scrollTo(0, 0);
   }

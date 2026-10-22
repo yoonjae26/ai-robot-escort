@@ -66,7 +66,7 @@ def test_small_photo_not_upscaled_and_missing_or_broken_skipped(tmp_path):
 def test_overlay_loose_dashed_with_leg_label():
     svg = overlay_svg({"w": 740, "h": 986, "mark": [0.5, 0.5, 0.05]}, "loose", "danger", "FL")
     assert 'stroke-dasharray' in svg and "발 접촉 위치 (추정) · 앞 왼발(FL)" in svg
-    assert svg.count('stroke="#ffffff"') >= 1 and 'stroke="#d03b3b"' in svg  # 흰 테두리 + 판정 색
+    assert svg.count('stroke="#ffffff"') >= 1 and 'stroke="#EF6461"' in svg  # 흰 테두리 + 판정 색
     assert 'cx="370.0" cy="493.0" r="37.0"' in svg
 
 
@@ -80,7 +80,7 @@ def test_no_overlay_for_visible_problems(kind):
 
 def test_loose_label_stays_inside_photo():
     svg = overlay_svg({"w": 620, "h": 827, "mark": [0.02, 0.02, 0.05]}, "loose", "warn", "RR")
-    assert "stroke-dasharray" in svg and 'stroke="#fab219"' in svg
+    assert "stroke-dasharray" in svg and 'stroke="#F7B558"' in svg
     x, y, w, h = (float(v) for v in re.search(r'<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)"', svg).groups())
     assert 0 <= x and x + w <= 620 and 0 <= y and y + h <= 827  # 위에 자리가 없으면 아래로
     assert overlay_svg({"w": 10, "h": 10, "mark": None}, "loose", "danger") == ""

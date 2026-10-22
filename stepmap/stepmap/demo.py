@@ -19,7 +19,8 @@ import math
 import random
 from pathlib import Path
 
-from .events import GeoRef, extra_sink, judge, write_events, write_foot_traces, write_trajectory
+from .events import (BLOCK_SIZE_M, GeoRef, block_index, extra_sink, group_foot_traces, judge, summarize_blocks, write_blocks,
+                     write_events, write_foot_traces, write_trajectory)
 
 DAY_S = 86400
 
@@ -188,8 +189,8 @@ def _walk(rng: random.Random, waypoints, t0: float, session: str, thresholds: di
 
 
 def generate(out_dir: str | Path, thresholds: dict | None = None, split: bool = False,
-             photos_dir: str | Path | None = None) -> tuple[list[dict], list[dict]]:
-    """예시 trajectory.csv, events.csv를 out_dir에 만들고 (trajectory, events)를 반환한다.
+             photos_dir: str | Path | None = None, block_size: float = BLOCK_SIZE_M) -> tuple[list[dict], list[dict]]:
+    """trajectory.csv, events.csv, foot_traces.csv, blocks.csv를 out_dir에 만들고 (trajectory, events)를 반환한다.
 
     split=True면 같은 측정 결과를 기능별 파일로 나눠 out_dir/raw/에도 저장한다 (split_events 참고).
     photos_dir를 주면 그 폴더의 현장 사진을 정해진 지점에 연결한다 (attach_photos 참고).
@@ -202,6 +203,7 @@ def generate(out_dir: str | Path, thresholds: dict | None = None, split: bool = 
     write_trajectory(out_dir / "trajectory.csv", traj)
     traces = make_foot_traces(events)
     write_foot_traces(out_dir / "foot_traces.csv", traces)
+    write_blocks(out_dir / "blocks.csv", make_blocks(traj, events, traces, block_size, thresholds))
     write_events(out_dir / "events.csv", events)
     if split:
         for name, rows in split_events(events).items():
@@ -302,27 +304,112 @@ def _band(t: float) -> float:
             + 1.5 * math.exp(-(t / 0.04) ** 2))
 
 
+# 같은 블록을 다른 발이 다시 밟은 걸음: (첫 걸음 다리, 지점 값 mm) → (다시 밟은 다리, 그 걸음의 추가 침하 mm).
+# 뒷발이 앞발 자리를 약 REPEAT_DELAY_S 뒤에 딛는다. 기준(3mm)을 두 걸음 모두 넘으면 "확정", 한 걸음이면 "의심"
+REPEAT_STEPS = {
+    ("FL", 8.5): ("RL", 7.9),  # 위험, 두 걸음 모두 기준 초과 → 확정
+    ("FR", 2.4): ("RR", 2.0),  # 정상, 두 걸음 모두 기준 미만
+    ("FR", 2.7): ("RR", 2.5),
+}
+REPEAT_DELAY_S = 0.9
+
+
+def _trace_rows(rng: random.Random, eid: str, leg: str, value: float, t_event: float) -> list[dict]:
+    """걸음 하나의 발끝 높이 기록. 그래프에서 읽히는 추가 침하(events.extra_sink)가 value와 같다."""
+    n_normal = rng.randint(18, 26)
+    a1, c1, a2 = rng.uniform(0.85, 1.15), -0.13 + rng.uniform(-0.01, 0.01), rng.uniform(0.85, 1.1)
+    contact = rng.uniform(-0.5, 0.5)  # 접지 높이는 평소와 비슷
+    mean = [round(_foot_curve(t), 2) for t in TRACE_T]
+    lo = [round(m - 0.85 * _band(t), 2) for m, t in zip(mean, TRACE_T)]
+    hi = [round(m + 1.15 * _band(t), 2) for m, t in zip(mean, TRACE_T)]
+    sink = 2.0 + value
+    for _ in range(4):  # 저장할 값(소수 둘째 자리) 기준으로 계산한 추가 침하가 value와 같아지게 맞춘다
+        step = [round(_foot_curve(t, 31 * a1, c1, 26 * a2, contact, sink), 2) for t in TRACE_T]
+        got = extra_sink({"t": TRACE_T, "z_step": step, "z_mean": mean})["extra_mm"]
+        if abs(got - value) < 0.005:
+            break
+        sink += value - got
+    return [{"id": eid, "leg": leg, "t": t, "z_step": zs, "z_mean": zm, "z_lo": zl, "z_hi": zh,
+             "n_normal": n_normal, "t_event": t_event} for t, zs, zm, zl, zh in zip(TRACE_T, step, mean, lo, hi)]
+
+
 def make_foot_traces(events: list[dict]) -> list[dict]:
-    """흔들림 지점마다 발끝 높이 기록. 그래프에서 읽히는 추가 침하(events.extra_sink)가 그 지점의 value와 같다."""
-    rng = random.Random(SEED + 2)
+    """흔들림 지점마다 발끝 높이 기록. 첫 걸음(지점의 다리·시각)의 추가 침하가 그 지점의 value와 같고,
+    REPEAT_STEPS의 지점은 다른 발이 같은 블록을 다시 밟은 걸음이 하나 더 있다. 행 순서: id·접지 시각·t."""
+    rng, rng_repeat = random.Random(SEED + 2), random.Random(SEED + 3)
     rows = []
     for e in sorted((e for e in events if e["kind"] == "loose"), key=lambda e: e["id"]):
-        n_normal = rng.randint(18, 26)
-        a1, c1, a2 = rng.uniform(0.85, 1.15), -0.13 + rng.uniform(-0.01, 0.01), rng.uniform(0.85, 1.1)
-        contact = rng.uniform(-0.5, 0.5)  # 접지 높이는 평소와 비슷
-        mean = [round(_foot_curve(t), 2) for t in TRACE_T]
-        lo = [round(m - 0.85 * _band(t), 2) for m, t in zip(mean, TRACE_T)]
-        hi = [round(m + 1.15 * _band(t), 2) for m, t in zip(mean, TRACE_T)]
-        sink = 2.0 + e["value"]
-        for _ in range(4):  # 저장할 값(소수 둘째 자리) 기준으로 계산한 추가 침하가 value와 같아지게 맞춘다
-            step = [round(_foot_curve(t, 31 * a1, c1, 26 * a2, contact, sink), 2) for t in TRACE_T]
-            got = extra_sink({"t": TRACE_T, "z_step": step, "z_mean": mean})["extra_mm"]
-            if abs(got - e["value"]) < 0.005:
-                break
-            sink += e["value"] - got
-        rows += [{"id": e["id"], "leg": e["leg"], "t": t, "z_step": zs, "z_mean": zm, "z_lo": zl, "z_hi": zh,
-                  "n_normal": n_normal, "t_event": e["t"]} for t, zs, zm, zl, zh in zip(TRACE_T, step, mean, lo, hi)]
+        rows += _trace_rows(rng, e["id"], e["leg"], e["value"], e["t"])
+    for e in sorted((e for e in events if e["kind"] == "loose"), key=lambda e: e["id"]):
+        again = REPEAT_STEPS.get((e["leg"], e["value"]))
+        if again:
+            rows += _trace_rows(rng_repeat, e["id"], again[0], again[1], round(e["t"] + REPEAT_DELAY_S, 2))
+    rows.sort(key=lambda r: (r["id"], r["t_event"], r["t"]))
     return rows
+
+
+# ---------------------------------------------------------------------------
+# 밟은 블록 (blocks.csv): 궤적을 따라 네 발의 접지 위치를 만들어 블록 격자로 모은다
+# 치수는 Unitree Go2 (URDF hip_x 0.1934 m, hip_y 0.0465 m, 다리 바깥 간격 포함) 기준 어림값, 걸음새는 트롯
+# ---------------------------------------------------------------------------
+STRIDE_M = 0.25           # 한 발이 다음에 딛기까지 몸이 나아가는 거리 (0.45 m/s × 걸음 주기 약 0.55초)
+FOOT_FORE_M = 0.19        # 몸 중심 → 앞발·뒷발 앞뒤 거리 (hip_x)
+FOOT_SIDE_M = 0.14        # 몸 중심 → 왼발·오른발 좌우 거리 (hip_y + 다리 바깥 간격, 좌우 발 간격 약 0.28 m)
+CENTERLINE_STEP_M = 0.5   # 몸 중심선: 궤적에서 이 거리 이상 떨어진 점만 이어 위치 흔들림을 거른다
+# (앞 +1 / 뒤 −1, 왼쪽 +1 / 오른쪽 −1). odom은 ROS 규약이라 y가 왼쪽
+LEG_SIGN = {"FL": (1, 1), "FR": (1, -1), "RL": (-1, 1), "RR": (-1, -1)}
+TROT_PHASE = {"FL": 0.0, "RR": 0.0, "FR": 0.5, "RL": 0.5}  # 대각선 두 발씩 번갈아 딛는다 (보폭 비율)
+NORMAL_EXTRA_MM = 1.5     # 흔들림이 아닌 블록의 접지 추가 침하 상한 (평소 걸음 수준, 기준 3 mm 미만)
+
+
+def foot_contacts(traj: list[dict], rng: random.Random) -> list[dict]:
+    """궤적(몸 중심)을 따라 네 발의 접지 [{t, x, y, leg, extra_mm}] (시각 순)."""
+    pts = [traj[0]]
+    for p in traj[1:]:
+        if math.hypot(p["x"] - pts[-1]["x"], p["y"] - pts[-1]["y"]) >= CENTERLINE_STEP_M:
+            pts.append(p)
+    if pts[-1] is not traj[-1]:
+        pts.append(traj[-1])
+    cum = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        cum.append(cum[-1] + math.hypot(b["x"] - a["x"], b["y"] - a["y"]))
+    out, i = [], 0
+    for leg, (fore, side) in LEG_SIGN.items():
+        s, i = TROT_PHASE[leg] * STRIDE_M, 0
+        while s <= cum[-1]:
+            while i + 2 < len(cum) and cum[i + 1] < s:
+                i += 1
+            a, b = pts[i], pts[i + 1]
+            u = (s - cum[i]) / max(cum[i + 1] - cum[i], 1e-9)
+            h = math.atan2(b["y"] - a["y"], b["x"] - a["x"])
+            x, y = a["x"] + (b["x"] - a["x"]) * u, a["y"] + (b["y"] - a["y"]) * u
+            out.append({"t": a["t"] + (b["t"] - a["t"]) * u, "leg": leg,
+                        "x": x + fore * FOOT_FORE_M * math.cos(h) - side * FOOT_SIDE_M * math.sin(h),
+                        "y": y + fore * FOOT_FORE_M * math.sin(h) + side * FOOT_SIDE_M * math.cos(h),
+                        "extra_mm": round(rng.uniform(0.0, NORMAL_EXTRA_MM), 2)})
+            s += STRIDE_M
+    return sorted(out, key=lambda c: c["t"])
+
+
+def make_blocks(traj: list[dict], events: list[dict], trace_rows: list[dict], size: float = BLOCK_SIZE_M,
+                thresholds: dict | None = None) -> list[dict]:
+    """blocks.csv 행. 흔들림 지점이 있는 블록은 발끝 기록의 걸음들로 채워 max_extra_mm = 지점 값(추가 침하)이 되고,
+    그 칸에 닿은 걸음새 접지는 같은 걸음이므로 뺀다. 나머지 블록은 기준 미만 (NORMAL_EXTRA_MM)."""
+    rng = random.Random(SEED + 4)
+    steps = group_foot_traces(trace_rows)
+    loose = [e for e in events if e["kind"] == "loose"]
+    keys = {block_index(e["x"], e["y"], size) for e in loose}
+    assert len(keys) == len(loose), "흔들림 지점 두 곳이 같은 블록"
+    contacts = [c for c in foot_contacts(traj, rng) if block_index(c["x"], c["y"], size) not in keys]
+    for e in loose:
+        for st in steps.get(e["id"], []):
+            contacts.append({"t": st["t_event"] if st["t_event"] is not None else e["t"], "x": e["x"], "y": e["y"],
+                             "leg": st["leg"], "extra_mm": round(extra_sink(st)["extra_mm"], 1)})
+    contacts.sort(key=lambda c: c["t"])
+    blocks = summarize_blocks(contacts, size, demo_georef())
+    warn = (thresholds or {}).get("loose", (3.0, 6.0))[0]
+    assert all(b["max_extra_mm"] < warn for b in blocks if block_index(b["x"], b["y"], size) not in keys)
+    return blocks
 
 
 # 현장 사진 연결: (파일, 고르는 규칙, 비고, image_mark "u,v,r")

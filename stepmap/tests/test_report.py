@@ -185,3 +185,26 @@ def test_cli_report_hints_dashboard_without_link(tmp_path, capsys):
     assert '"report":"report.html"' in (out / "dashboard.html").read_text(encoding="utf-8")
     assert main(["report", ev, tr, "-o", str(out / "report.html")]) == 0
     assert "map을 다시 실행" not in capsys.readouterr().out
+
+
+def test_method_labels_by_category():
+    """신고서 측정 방식: 노면 형상 / 흔들림(발 접촉)."""
+    from stepmap.report import method_text
+    base = {"unit": "cm", "value": 4.8, "value_foot": 5.1, "leg": "FR"}
+    assert method_text({**base, "kind": "step", "source": "camera+foot"}).startswith("노면 형상 · 카메라 4.8")
+    assert method_text({**base, "kind": "slope", "source": "camera", "leg": ""}) == "노면 형상 · 카메라"
+    assert method_text({**base, "kind": "step", "source": "foot"}) == "노면 형상 · 발 접촉 · 앞 오른발(FR)"
+    assert method_text({**base, "kind": "loose", "source": "foot", "leg": "FL"}) == "흔들림(발 접촉) · 앞 왼발(FL)"
+
+
+def test_report_uses_new_grade_colors(tmp_path):
+    """신고서 등급 색: 위험 #EF6461, 주의 #F7B558, 정상 #A5D48C (옛 색 없음). 등급 색 바탕 위 글자는 #1F1C1F."""
+    from stepmap import demo
+    from stepmap.report import write_report
+    demo.generate(tmp_path)
+    html = write_report(tmp_path / "events.csv", tmp_path / "trajectory.csv", tmp_path / "r.html")[0].read_text(encoding="utf-8")
+    for c in ("#EF6461", "#F7B558"):
+        assert c in html, c
+    for old in ("#d03b3b", "#fab219", "#0ca30c"):
+        assert old not in html.lower(), old
+    assert ".no-danger { background: #EF6461; color: #1F1C1F; }" in html

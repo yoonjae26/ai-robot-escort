@@ -8,7 +8,8 @@ from stepmap import demo
 from stepmap.cli import main
 from stepmap.dashboard import near_visual_issues, write_dashboard
 from stepmap.events import (
-    FOOT_TRACE_COLUMNS, FormatError, extra_sink, group_foot_traces, read_events, read_foot_traces,
+    DEFAULT_THRESHOLDS, FOOT_TRACE_COLUMNS, FormatError, count_stepped_blocks, extra_sink, group_foot_traces,
+    loose_confirmation, read_blocks, read_events, read_foot_traces,
     settle_index, stance_sink, validate_foot_traces, write_foot_traces,
 )
 
@@ -106,17 +107,20 @@ def test_demo_traces_match_values(demo_dir):
     traces = group_foot_traces(read_foot_traces(demo_dir / "foot_traces.csv"))
     loose = {i for i, e in events.items() if e["kind"] == "loose"}
     assert set(traces) == loose and len(loose) == 8  # 흔들림 지점만, 모두 기록 있음
-    for i, tr in traces.items():
-        e, r = events[i], extra_sink(tr)
+    for i, steps in traces.items():
+        e, tr = events[i], steps[0]  # 첫 걸음 = 지점의 다리·시각
+        r = extra_sink(tr)
         assert r["extra_mm"] == pytest.approx(e["value"], abs=0.05), i  # 그래프에서 읽히는 추가 침하 = value
         assert abs(r["contact_diff_mm"]) <= 0.6  # 접지 높이는 평소와 비슷
-        assert tr["leg"] == e["leg"] and 18 <= tr["n_normal"] <= 26
+        assert tr["leg"] == e["leg"] and tr["t_event"] == e["t"] and 18 <= tr["n_normal"] <= 26
         assert -0.31 <= tr["t"][0] <= -0.29 and 0.79 <= tr["t"][-1] <= 0.83
-    assert round(extra_sink(traces["ev_0014"])["extra_mm"], 1) == 8.5
+        assert len({s["leg"] for s in steps}) == len(steps)  # 같은 블록을 같은 발이 두 번 밟지 않는다
+    assert [round(extra_sink(s)["extra_mm"], 1) for s in traces["ev_0014"]] == [8.5, 7.9]  # 앞 왼발 → 뒤 왼발
+    assert [s["leg"] for s in traces["ev_0014"]] == ["FL", "RL"]
 
 
 def test_demo_traces_baseline_is_normal_stance(demo_dir):
-    tr = next(iter(group_foot_traces(read_foot_traces(demo_dir / "foot_traces.csv")).values()))
+    tr = next(iter(group_foot_traces(read_foot_traces(demo_dir / "foot_traces.csv")).values()))[0]
     stance = [z for t, z in zip(tr["t"], tr["z_mean"]) if 0.06 <= t <= 0.42]
     assert abs(sum(stance) / len(stance)) < 0.5  # 평소 걸음이 딛고 있을 때 평균 높이 ≈ 0mm
 
@@ -163,16 +167,41 @@ def test_near_visual_issues():
     assert near_visual_issues(loose, events) == ["b", "a"]
 
 
-def test_physical_page_structure(demo_dir):
+def test_loose_detail_texts(demo_dir):
+    """흔들림 상세(검사 결과 페이지): 발끝 높이 그래프 글자, 측정 방법, 주변 노면 형상 비교."""
     html = write_dashboard(demo_dir / "events.csv", demo_dir / "trajectory.csv", demo_dir / "d.html").read_text(encoding="utf-8")
-    for sid in ("p-crumb", "p-k-all", "p-k-flag", "p-k-hidden", "p-k-ok", "p-list", "p-detail"):
+    for sid in ("d-list", "d-detail"):
         assert f'id="{sid}"' in html, sid
     for text in ("발이 땅에 닿은 뒤 시간 [초]", "발끝 높이 [mm]", "평소 걸음 범위", "평소 걸음 평균", "이번 걸음",
                  "접지 높이: 평소보다", "체중이 실린 뒤 추가 침하", "위험 기준", "관절 각도 → 발끝 위치(정기구학), IMU 중력 정렬, 평소 걸음 대비",
-                 "카메라로는 이상 없음", "외관 검사 비교", "평소 걸음 수"):
+                 "카메라로는 이상 없음", "주변 노면 형상 비교", "평소 걸음 수", "밟은 횟수"):
         assert text in html, text
     assert "stroke-dasharray:6 4" in html  # 평균은 점선 (색만으로 구분하지 않음)
-    assert "다음 단계에서 구성" not in html  # 네 페이지 모두 구성됨
+
+
+def test_stepped_blocks_and_confirmation(demo_dir):
+    """밟은 블록 = foot_traces의 서로 다른 id (같은 블록을 다시 밟은 걸음은 한 번만)."""
+    rows = read_foot_traces(demo_dir / "foot_traces.csv")
+    # blocks.csv가 없을 때의 기준: 발끝 기록의 서로 다른 id (흔들림 지점 블록만)
+    assert count_stepped_blocks(trace_rows=rows) == 8
+    assert count_stepped_blocks(trace_rows=rows + rows) == 8
+    assert count_stepped_blocks(trace_rows=[{**r, "id": ""} for r in rows]) == 0  # 어느 블록인지 모르는 행은 세지 않는다
+    html = write_dashboard(demo_dir / "events.csv", demo_dir / "trajectory.csv", demo_dir / "d.html").read_text(encoding="utf-8")
+    data = payload_of(html)
+    assert data["stepped_blocks"] == len(read_blocks(demo_dir / "blocks.csv")) > 8  # blocks.csv가 있으면 그 행 수
+    ev = {e["id"]: e for e in data["events"]}
+    assert [s["leg"] for s in ev["ev_0014"]["steps"]] == ["FL", "RL"] and ev["ev_0014"]["confirm"] == "확정"
+    assert ev["ev_0014"]["trace"]["leg"] == "FL"  # 그래프는 첫 걸음
+
+
+def test_loose_confirmation_rule():
+    """2걸음 이상 기준(주의 3mm) 초과 → 확정, 1걸음 → 의심, 없으면 None."""
+    assert loose_confirmation([8.5, 7.9]) == "확정"
+    assert loose_confirmation([5.1]) == "의심"
+    assert loose_confirmation([5.1, 2.0]) == "의심"  # 다시 밟았지만 한 걸음만 넘음
+    assert loose_confirmation([3.0, 3.0]) == "확정"  # 기준값 이상이면 초과
+    assert loose_confirmation([2.4, 2.0]) is None and loose_confirmation([]) is None
+    assert loose_confirmation([4.0, 4.0], {**DEFAULT_THRESHOLDS, "loose": (5.0, 8.0)}) is None
 
 
 # --- 모듈 출력(raw)과 t_event ------------------------------------------------------------
