@@ -47,7 +47,7 @@ stepmap map data/events.csv data/trajectory.csv -o outputs/dashboard.html
 | `outputs/report.html` | 브라우저로 열고 인쇄(A4) | 요약, 위치 확인용 경로 그림, 위험·주의 지점 목록 |
 | `outputs/report.csv` | 엑셀 등 | 신고서 목록과 같은 지점·순서·번호 (지자체 데이터 제공용, 위험·주의만) |
 | `data/events.csv` | 엑셀 등 | 전체 측정 지점 (정상 포함). 전체 지점은 events.csv를 쓴다 |
-| `outputs/screens/` | 이미지 뷰어 | 발표용 화면 21장 (2배율): 종합 현황 선택 없음·흔들림 ev_0014 선택·단차 ev_0012 선택 (각각 1440·1920·1280 폭), 외관 검사(ev_0012), 물리적 안정성(ev_0014 그래프), 점검 이력(1440), 점검 이력 최근 날짜·2026-09-15 (각각 1920·1280 폭), 모바일, 라이트, 인터넷 없을 때, 신고서 1·2쪽 |
+| `outputs/screens/` | 이미지 뷰어 | 발표용 화면 23장 (2배율): 종합 현황 선택 없음·흔들림 ev_0014 선택·단차 ev_0012 선택 (각각 1440·1920·1280 폭), 검사 결과 단차 ev_0012·흔들림 ev_0014 (각각 1920·1280 폭), 점검 이력(1440), 점검 이력 최근 날짜·2026-09-15 (각각 1920·1280 폭), 모바일, 라이트, 인터넷 없을 때, 신고서 1·2쪽 |
 
 현재 디자인 데이터: 측정 지점 40개 (위험 4 · 주의 5 · 정상 31), 이동 거리 912m, 신고서 A4 4쪽 (신고 대상 9건), 사진 연결 3곳.
 
@@ -55,14 +55,13 @@ stepmap map data/events.csv data/trajectory.csv -o outputs/dashboard.html
 
 ### 대시보드
 
-왼쪽 사이드바로 4페이지를 오간다. 주소 해시(`#visual/ev_0012` 등)로 페이지·지점이 유지되고 뒤로 가기가 동작한다. 네이비 테마, 다크 기본(사이드바 아래 버튼으로 라이트 전환, 브라우저에 기억). 자세한 화면 규칙은 계획서 8장.
+왼쪽 사이드바로 3페이지를 오간다. 주소 해시(`#detail/ev_0012` 등)로 페이지·지점이 유지되고 뒤로 가기가 동작한다. 네이비 테마, 다크 기본(사이드바 아래 버튼으로 라이트 전환, 브라우저에 기억). 자세한 화면 규칙은 계획서 8장.
 
 | 페이지 | 내용 |
 |---|---|
-| 종합 현황 | KPI 4개(점검 거리·외관 이상·흔들림 의심·정상 지점), 지도(경로 양 끝 출발·도착, 판정 색 + 종류 모양 마커, 오른쪽 위 **밝은 지도 / 어두운 지도** 전환), 범례, 위험·주의 지점 목록. 데스크톱은 스크롤 없이 한 화면. 마커·목록을 누르면 흔들림은 물리적 안정성, 나머지는 외관 검사로 이동. 최대 확대에서도 묶인 마커는 누르면 부채꼴로 펼침 |
-| 외관 검사 | 흔들림을 뺀 지점 목록(탭: 전체·단차·경사·균열, 정상 포함 선택) + 상세(사진, 값, 기준과 배수, 교차 측정 카드, 측정 근거, 지도에서 위치 보기) |
-| 물리적 안정성 검사 | 흔들림 지점 목록 + 상세(사진 위 발 접촉 위치, 발끝 높이 그래프와 추가 침하, 측정 근거, 1m 안 외관 이상 비교) |
-| 점검 이력 | 필터(세션·종류·판정·측정 방식), 요약 카드 5개, 종류별 판정 누적 막대, 점검 세션 표, 지점 목록 표(열 머리 정렬, 행 클릭 이동, 모바일은 카드형). **CSV 다운로드**: 현재 필터 결과를 events.csv와 같은 열로 (BOM, 필터가 없으면 events.csv와 같은 파일). **신고서 열기**: 같은 폴더의 report.html (인쇄 → PDF로 저장 가능) |
+| 종합 현황 | KPI 4개(점검 거리·외관 이상·흔들림 의심·정상 지점), 지도(판정 색 + 종류 모양 마커, 오른쪽 위 **밝은 지도 / 어두운 지도** 전환), 판정 필터 버튼(위험·주의·정상), 지도 옆 상세 패널(마커를 누르면 사진·근거·위치, `#home/<id>`). 데스크톱은 스크롤 없이 한 화면. 최대 확대에서도 묶인 마커는 누르면 부채꼴로 펼침 |
+| 검사 결과 | 요약 한 줄(위험·주의·밟은 블록 수) + 왼쪽 지점 목록(탭: 전체·노면 형상·흔들림, 판정 칩, 흔들림은 ◆와 확정/의심) + 오른쪽 상세(사진, 측정값, 근거, 위치·시각·방식, 노면 형상은 교차 측정 카드, 흔들림은 발끝 높이 그래프·밟은 횟수·추가 침하) + 작은 위치 지도. 주소 `#detail/<id>` (예전 `#visual/<id>`, `#physical/<id>`도 열림) |
+| 점검 이력 | 점검 날짜 칩 + 달력(`#history/<YYYY-MM-DD>`), 그날 KPI 4개, 그날 지도(이동경로·100 m 눈금·출발·도착), 종류별 판정 막대, 지점 목록 표(필터·정렬, 정상은 접어 둠, 행 클릭 → 검사 결과). **CSV 다운로드**: 현재 필터 결과를 events.csv와 같은 열로. **신고서 열기**: 같은 폴더의 report.html (가장 최근 날짜) |
 
 ## 4. 테스트
 
@@ -74,9 +73,9 @@ pytest
 
 | 명령 | 입력 | 출력 |
 |---|---|---|
-| `stepmap demo -o DIR [--split] [--photos PHOTOS]` | `config.yaml` (판정 기준), `PHOTOS/` 사진 | `DIR/trajectory.csv`, `DIR/events.csv`, `DIR/foot_traces.csv` (흔들림 발끝 기록), `DIR/history/<YYYY-MM-DD>/events.csv`·`trajectory.csv` (지난 점검 4회: 09-15, 09-29, 10-06, 10-13), `--split`: `DIR/raw/camera_step.csv`, `camera_slope.csv`, `camera_crack.csv`, `foot.csv` |
+| `stepmap demo -o DIR [--split] [--photos PHOTOS]` | `config.yaml` (판정 기준), `PHOTOS/` 사진 | `DIR/trajectory.csv`, `DIR/events.csv`, `DIR/foot_traces.csv` (흔들림 발끝 기록), `DIR/blocks.csv` (로봇 발이 닿은 블록마다 한 줄: 걸음 수·다리·가장 큰 추가 침하, 격자 `block.size_m`), `DIR/history/<YYYY-MM-DD>/events.csv`·`trajectory.csv` (지난 점검 4회: 09-15, 09-29, 10-06, 10-13), `--split`: `DIR/raw/camera_step.csv`, `camera_slope.csv`, `camera_crack.csv`, `foot.csv` |
 | `stepmap merge 입력들 -o OUT` | 기능별 결과 CSV (id·level 빈칸 가능), 발끝 기록 CSV (id 빈칸, `t_event`로 연결, 머리줄로 자동 구분), `config.yaml` (`thresholds`, `merge`, `geo`) | `OUT` (events.csv 형식), 발끝 기록이 있으면 `OUT 폴더/foot_traces.csv` (흔들림 지점 시각·다리로 id 연결, 짝 없는 기록은 경고) |
-| `stepmap map EVENTS TRAJ -o OUT [--traces CSV] [--history DIR]` | events.csv, trajectory.csv (가장 최근 점검), 발끝 기록 (기본: events.csv와 같은 폴더의 `foot_traces.csv`, 없으면 그래프 대신 안내), 지난 점검 (기본: events.csv와 같은 폴더의 `history/<YYYY-MM-DD>/`, 점검 이력 페이지만 사용), `config.yaml` (`thresholds`, `report.area`, `robot.name`) | `OUT` (HTML 1개), `OUT 폴더/photos/` 사진 사본 |
+| `stepmap map EVENTS TRAJ -o OUT [--traces CSV] [--blocks CSV] [--history DIR]` | events.csv, trajectory.csv (가장 최근 점검), 발끝 기록 (기본: events.csv와 같은 폴더의 `foot_traces.csv`, 없으면 그래프 대신 안내), 지난 점검 (기본: events.csv와 같은 폴더의 `history/<YYYY-MM-DD>/`, 점검 이력 페이지만 사용), 밟은 블록 (기본: 같은 폴더의 `blocks.csv`, 없으면 밟은 블록 수는 발끝 기록 기준), `config.yaml` (`thresholds`, `report.area`, `robot.name`) | `OUT` (HTML 1개), `OUT 폴더/photos/` 사진 사본 |
 | `stepmap report EVENTS TRAJ [-o OUT]` | events.csv, trajectory.csv, `config.yaml` (`thresholds`, `report.area`) | `outputs/report.html`, 같은 이름의 `.csv`, `photos/` 사진 사본 |
 
 `events.csv`·`trajectory.csv`·`foot_traces.csv` 형식은 계획서 6장(발끝 기록과 추가 침하 계산은 6.4), 병합 규칙은 9.3, 신고서 구성은 8.3.
@@ -109,7 +108,7 @@ stepmap/
 │   ├── photos/        # 현장 사진 원본 (수정하지 않음)
 │   ├── raw/           # 기능별 결과 (merge 입력, 발끝 기록 포함)
 │   ├── history/       # 지난 점검 (날짜별 events.csv, trajectory.csv)
-│   ├── events.csv, trajectory.csv, foot_traces.csv
+│   ├── events.csv, trajectory.csv, foot_traces.csv, blocks.csv
 ├── outputs/
 │   ├── dashboard.html, report.html, report.csv
 │   ├── photos/        # 사진 사본 (생성물, git 제외)

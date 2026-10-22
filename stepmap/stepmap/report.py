@@ -57,13 +57,16 @@ def leg_name(leg: str) -> str:
 
 
 def method_text(e: dict) -> str:
+    """측정 방식: 분류(노면 형상 / 흔들림(발 접촉)) + 센서·다리. 대시보드 "검사 결과"와 같은 분류."""
+    if e["kind"] == "loose":
+        return f"흔들림(발 접촉) · {leg_name(e['leg'])}" if e["leg"] else "흔들림(발 접촉)"
     if e["source"] == "camera+foot":
         diff = abs(e["value_foot"] - e["value"])
-        return (f"카메라 {fmt_value(e['value'], e['unit'])} · 발 {fmt_value(e['value_foot'], e['unit'])} "
+        return (f"노면 형상 · 카메라 {fmt_value(e['value'], e['unit'])} · 발 {fmt_value(e['value_foot'], e['unit'])} "
                 f"· {leg_name(e['leg'])} · 차이 {fmt_value(diff, e['unit'])}")
     if e["source"] == "foot":
-        return f"발 접촉 · {leg_name(e['leg'])}"
-    return "카메라"
+        return f"노면 형상 · 발 접촉 · {leg_name(e['leg'])}"
+    return "노면 형상 · 카메라"
 
 
 def report_items(events: list[dict], thresholds: dict | None = None) -> list[dict]:
@@ -259,25 +262,25 @@ def build_html(events: list[dict], traj: list[dict], thresholds: dict | None = N
   .lv {{ display: inline-flex; align-items: center; gap: 1.2mm; font-weight: 700; white-space: nowrap; }}
   .lv .sw {{ display: inline-grid; place-items: center; min-width: 4.6mm; height: 4.6mm; padding: 0 0.8mm; border-radius: 1.2mm;
             font-size: 8pt; font-weight: 800; line-height: 1; }}
-  .lv-danger .sw {{ background: #d03b3b; color: #ffffff; }}
-  .lv-warn .sw {{ background: #fab219; color: #1a1a19; }}
-  .lv-ok .sw {{ background: #0ca30c; color: #1a1a19; }}
+  .lv-danger .sw {{ background: #EF6461; color: #1F1C1F; }}
+  .lv-warn .sw {{ background: #F7B558; color: #1a1a19; }}
+  .lv-ok .sw {{ background: #A5D48C; color: #1a1a19; }}
   .figure {{ break-inside: avoid; }}
   .route {{ display: block; width: 100%; height: auto; border: 1px solid #c9cbc6; }}
   .route .tag {{ font: 600 11px "Malgun Gothic", system-ui, sans-serif; fill: #1f2328; }}
-  .route .no-danger {{ fill: #d03b3b; stroke: #ffffff; stroke-width: 1.5; }}
-  .route .no-warn {{ fill: #fab219; stroke: #ffffff; stroke-width: 1.5; }}
-  .route .dot-danger {{ fill: #d03b3b; stroke: #ffffff; stroke-width: 1; }}
-  .route .dot-warn {{ fill: #fab219; stroke: #1f2328; stroke-width: 0.8; }}
+  .route .no-danger {{ fill: #EF6461; stroke: #ffffff; stroke-width: 1.5; }}
+  .route .no-warn {{ fill: #F7B558; stroke: #ffffff; stroke-width: 1.5; }}
+  .route .dot-danger {{ fill: #EF6461; stroke: #ffffff; stroke-width: 1; }}
+  .route .dot-warn {{ fill: #F7B558; stroke: #1f2328; stroke-width: 0.8; }}
   .route .no-text {{ font: 700 10px system-ui, sans-serif; }}
-  .route .no-text-danger {{ fill: #ffffff; }}
+  .route .no-text-danger {{ fill: #1F1C1F; }}
   .route .no-text-warn {{ fill: #1a1a19; }}
   .cap {{ color: #5c626b; font-size: 9pt; margin: 1.5mm 0 0; }}
   .item {{ display: grid; grid-template-columns: 9mm 1fr; gap: 3mm; padding: 3mm 0; border-bottom: 1px solid #d9dad6;
           break-inside: avoid; page-break-inside: avoid; }}
   .item .no {{ width: 8mm; height: 8mm; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 10pt; }}
-  .no-danger {{ background: #d03b3b; color: #ffffff; }}
-  .no-warn {{ background: #fab219; color: #1a1a19; }}
+  .no-danger {{ background: #EF6461; color: #1F1C1F; }}
+  .no-warn {{ background: #F7B558; color: #1a1a19; }}
   .item h3 {{ margin: 0; font-size: 11.5pt; display: flex; align-items: baseline; gap: 2mm; flex-wrap: wrap; }}
   .item .val {{ font-size: 14pt; font-weight: 800; font-variant-numeric: tabular-nums; }}
   .item .crit {{ margin: 0.8mm 0 1.5mm; font-weight: 600; }}

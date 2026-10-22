@@ -26,6 +26,9 @@ OPTIONAL_EVENT_COLUMNS = OPTIONAL_COLUMNS
 TRAJECTORY_COLUMNS = ["t", "x", "y", "lat", "lon"]
 # 흔들림 지점의 발끝 높이 기록 (계획서 6.4). 행 하나 = 한 시점, t는 접지 순간 = 0초
 FOOT_TRACE_COLUMNS = ["id", "leg", "t", "z_step", "z_mean", "z_lo", "z_hi", "n_normal", "t_event"]
+# 로봇 발이 닿은 블록 요약. 행 하나 = 블록 하나 (x·y: 격자 칸 가운데, legs: 밟은 다리들 "FL|RL")
+BLOCK_COLUMNS = ["block_id", "x", "y", "lat", "lon", "n_steps", "legs", "max_extra_mm"]
+BLOCK_SIZE_M = 0.3  # 블록 격자 크기 기본값 (config.yaml block.size_m)
 
 KIND_UNITS = {"step": "cm", "slope": "deg", "crack": "score", "loose": "mm"}
 SOURCES = ("camera", "foot", "camera+foot")
@@ -37,6 +40,7 @@ _NUMERIC_DIGITS = {
     "t": 2, "x": 3, "y": 3, "lat": 8, "lon": 8,
     "value": 3, "confidence": 3, "value_foot": 3,
     "z_step": 2, "z_mean": 2, "z_lo": 2, "z_hi": 2, "n_normal": 0, "t_event": 2,  # foot_traces.csv (mm, 걸음 수, 초)
+    "n_steps": 0, "max_extra_mm": 2,  # blocks.csv (걸음 수, mm)
 }
 _REQUIRED_NUMERIC = {"t", "x", "y", "value", "confidence"}
 
@@ -81,6 +85,10 @@ def thresholds_from_config(cfg: dict) -> dict[str, tuple[float, float]]:
         danger = float(th.get(key.format("danger"), DEFAULT_THRESHOLDS[kind][1]))
         out[kind] = (warn, danger)
     return out
+
+
+def block_size_from_config(cfg: dict) -> float:
+    return float((cfg.get("block") or {}).get("size_m", BLOCK_SIZE_M))
 
 
 # ---------------------------------------------------------------------------
@@ -420,12 +428,15 @@ def write_events(path: str | Path, rows: list[dict], raw: bool = False) -> None:
 
 
 def _trace_key(r: dict) -> str:
-    """지점 하나의 기록을 묶는 열쇠: id, id가 비었으면(모듈 출력) 접지 시각·다리."""
-    return r["id"] if r.get("id") else f"@{r.get('t_event')}/{r.get('leg')}"
+    """걸음 하나의 기록을 묶는 열쇠. 한 블록(지점 id)을 여러 번 밟으면 걸음마다 접지 시각 t_event가 다르다.
+    id + t_event, t_event가 없으면(예전 파일) id 하나가 한 걸음, id가 비었으면(모듈 출력) 접지 시각·다리."""
+    if r.get("id"):
+        return f"{r['id']}@{r['t_event']}" if r.get("t_event") is not None else r["id"]
+    return f"@{r.get('t_event')}/{r.get('leg')}"
 
 
 def validate_foot_traces(rows: list[dict], raw: bool = False) -> list[str]:
-    """foot_traces.csv 형식 검사: 열, 숫자, 다리, 범위(z_lo ≤ z_mean ≤ z_hi), 지점마다 시간순·같은 다리·같은 걸음 수.
+    """foot_traces.csv 형식 검사: 열, 숫자, 다리, 범위(z_lo ≤ z_mean ≤ z_hi), 걸음마다 시간순·같은 다리·같은 평소 걸음 수.
 
     raw=True: 발 분석 모듈 출력(merge 전). id는 비어 있어도 되지만 그때는 t_event(접지 순간 절대 시각)가 있어야 한다.
     """
@@ -457,9 +468,9 @@ def validate_foot_traces(rows: list[dict], raw: bool = False) -> list[str]:
         prev = last.get(key)
         if prev is not None:
             if r["t"] <= prev["t"]:
-                errors.append(f"{where}: 같은 지점 안에서 t가 시간순이 아님")
+                errors.append(f"{where}: 같은 걸음 안에서 t가 시간순이 아님")
             if r["leg"] != prev["leg"] or r["n_normal"] != prev["n_normal"]:
-                errors.append(f"{where}: 같은 지점은 leg·n_normal이 같아야 함")
+                errors.append(f"{where}: 같은 걸음은 leg·n_normal이 같아야 함")
         last[key] = r
     for key, r in last.items():
         first_t = next(x["t"] for x in rows if _trace_key(x) == key and _is_num(x.get("t")))
@@ -484,15 +495,119 @@ def is_foot_traces_file(path: str | Path) -> bool:
     return {"z_step", "z_mean"} <= set(header)
 
 
-def group_foot_traces(rows: list[dict]) -> dict[str, dict]:
-    """지점 id별로 묶는다: {id: {"leg", "n_normal", "t": [...], "z_step": [...], "z_mean", "z_lo", "z_hi"}}."""
-    out: dict[str, dict] = {}
+def group_foot_traces(rows: list[dict]) -> dict[str, list[dict]]:
+    """지점(블록) id별 걸음 목록 (접지 시각 순): {id: [{"leg", "n_normal", "t_event", "t": [...], "z_step": [...],
+    "z_mean", "z_lo", "z_hi"}, ...]}. 걸음은 id + t_event로 나눈다 (_trace_key)."""
+    steps: dict[str, dict] = {}
     for r in rows:
-        g = out.setdefault(r["id"], {"leg": r["leg"], "n_normal": int(r["n_normal"]),
-                                     "t": [], "z_step": [], "z_mean": [], "z_lo": [], "z_hi": []})
+        g = steps.setdefault(_trace_key(r), {"id": r["id"], "leg": r["leg"], "n_normal": int(r["n_normal"]),
+                                             "t_event": r.get("t_event"),
+                                             "t": [], "z_step": [], "z_mean": [], "z_lo": [], "z_hi": []})
         for c in ("t", "z_step", "z_mean", "z_lo", "z_hi"):
             g[c].append(r[c])
+    out: dict[str, list[dict]] = {}
+    for g in steps.values():
+        out.setdefault(g.pop("id"), []).append(g)
+    for lst in out.values():
+        lst.sort(key=lambda g: (g["t_event"] is not None, g["t_event"] or 0))
     return out
+
+
+def count_stepped_blocks(blocks: list[dict] | None = None, trace_rows: list[dict] | None = None) -> int:
+    """로봇 발이 밟아 확인한 블록 수.
+
+    1) blocks.csv가 있으면 그 행 수. blocks.csv는 발이 닿은 블록마다 한 줄이고 block_id가 겹치지 않으므로
+       (validate_blocks) 행 수 = 서로 다른 블록 수다. 같은 블록을 여러 발이 밟아도 n_steps만 늘어난다.
+    2) 없으면 foot_traces.csv 기준: 발끝 기록은 걸음 하나마다 행 묶음이고 묶음의 id가 그 걸음이 딛은 흔들림 지점(블록)이다.
+       같은 블록을 다시 밟으면 같은 id에 걸음(t_event)이 늘어날 뿐이므로 서로 다른 id 수를 센다.
+       id가 빈 행(merge 전 모듈 출력)은 어느 블록인지 모르므로 세지 않는다. 이때는 흔들림 지점 블록만 세어진다.
+    """
+    if blocks is not None:
+        return len(blocks)
+    return len({r["id"] for r in trace_rows or [] if r.get("id")})
+
+
+# ---------------------------------------------------------------------------
+# 밟은 블록 요약 (blocks.csv)
+# ---------------------------------------------------------------------------
+
+def block_index(x: float, y: float, size: float = BLOCK_SIZE_M) -> tuple[int, int]:
+    """로컬 x·y가 들어가는 격자 칸 (size m 격자, 같은 칸이면 같은 블록)."""
+    return math.floor(x / size), math.floor(y / size)
+
+
+def block_id(ix: int, iy: int) -> str:
+    return f"b{ix}_{iy}"
+
+
+def summarize_blocks(contacts: list[dict], size: float = BLOCK_SIZE_M, geo: "GeoRef | None" = None) -> list[dict]:
+    """발 접지들 [{x, y, leg, extra_mm}]을 블록별로 모은다 (처음 밟은 순서).
+
+    n_steps: 그 칸에 닿은 접지 수, legs: 밟은 다리(처음 밟은 순, 중복 제외, "|"로 연결),
+    max_extra_mm: 접지들 중 가장 큰 추가 침하. x·y는 칸 가운데, lat·lon은 geo가 있을 때만.
+    """
+    out: dict[tuple[int, int], dict] = {}
+    for c in contacts:
+        ix, iy = block_index(c["x"], c["y"], size)
+        b = out.get((ix, iy))
+        if b is None:
+            cx, cy = (ix + 0.5) * size, (iy + 0.5) * size
+            lat, lon = geo.to_latlon(cx, cy) if geo else (None, None)
+            b = out[(ix, iy)] = {"block_id": block_id(ix, iy), "x": round(cx, 3), "y": round(cy, 3),
+                                 "lat": None if lat is None else round(lat, 8), "lon": None if lon is None else round(lon, 8),
+                                 "n_steps": 0, "legs": [], "max_extra_mm": None}
+        b["n_steps"] += 1
+        if c["leg"] not in b["legs"]:
+            b["legs"].append(c["leg"])
+        b["max_extra_mm"] = c["extra_mm"] if b["max_extra_mm"] is None else max(b["max_extra_mm"], c["extra_mm"])
+    return [{**b, "legs": "|".join(b["legs"])} for b in out.values()]
+
+
+def validate_blocks(rows: list[dict]) -> list[str]:
+    """blocks.csv 형식 검사: 열, block_id 빈칸·중복, 숫자, lat/lon, n_steps(1 이상 정수), legs(FR·FL·RR·RL을 |로, 중복 없음)."""
+    errors: list[str] = []
+    seen: set[str] = set()
+    for i, r in enumerate(rows, 1):
+        where = f"blocks {i}행({r.get('block_id', '?')})"
+        errors += _check_columns(list(r.keys()), BLOCK_COLUMNS, where)
+        if any(c not in r for c in BLOCK_COLUMNS):
+            continue
+        if not r["block_id"]:
+            errors.append(f"{where}: block_id 빈칸")
+        elif r["block_id"] in seen:
+            errors.append(f"{where}: block_id 중복")
+        seen.add(r["block_id"])
+        bad = [c for c in ("x", "y", "n_steps", "max_extra_mm") if not _is_num(r[c])]
+        if bad:
+            errors.append(f"{where}: {bad}는 숫자여야 함")
+        elif r["n_steps"] < 1 or r["n_steps"] != int(r["n_steps"]):
+            errors.append(f"{where}: n_steps는 1 이상의 정수")
+        errors += _check_latlon(r, where)
+        legs = str(r["legs"]).split("|") if r["legs"] else []
+        if not legs or any(g not in LEGS for g in legs) or len(set(legs)) != len(legs):
+            errors.append(f"{where}: legs {r['legs']!r}는 {list(LEGS)}를 |로 이은 것이어야 함 (중복 없이)")
+        elif _is_num(r["n_steps"]) and len(legs) > r["n_steps"]:
+            errors.append(f"{where}: legs 수가 n_steps보다 많음")
+    return errors
+
+
+def read_blocks(path: str | Path) -> list[dict]:
+    return _read(path, BLOCK_COLUMNS, validate_blocks)
+
+
+def write_blocks(path: str | Path, rows: list[dict]) -> None:
+    _write(path, rows, BLOCK_COLUMNS, validate_blocks)
+
+
+def loose_confirmation(extras_mm: list[float], thresholds: dict | None = None) -> str | None:
+    """흔들림 판정의 확실성: 같은 블록을 밟은 걸음들의 추가 침하 [mm] 중 기준(주의 기준) 이상인 걸음 수로 정한다.
+
+    2걸음 이상이 기준을 넘으면 "확정" (다른 발로 다시 밟아도 같은 결과), 1걸음이면 "의심" (한 번만 확인),
+    넘은 걸음이 없으면 None (정상).
+    """
+    warn = (thresholds or DEFAULT_THRESHOLDS)["loose"][0]
+    over = sum(1 for x in extras_mm if x >= warn - _EPS)
+    return "확정" if over >= 2 else "의심" if over == 1 else None
 
 
 # ---------------------------------------------------------------------------
@@ -582,16 +697,19 @@ def _combine_step(cam: dict, foot: dict) -> dict:
     return out
 
 
-TRACE_MATCH_S = 0.5  # 발끝 기록의 접지 시각(t_event)과 흔들림 지점 시각의 허용 차이 [초]
+TRACE_MATCH_S = 0.5   # 발끝 기록의 접지 시각(t_event)과 흔들림 지점 시각의 허용 차이 [초]
+TRACE_REPEAT_S = 2.0  # 같은 블록을 다른 발이 다시 밟은 걸음: 첫 걸음 뒤 이 시간 안 [초]
 
 
-def link_foot_traces(trace_rows: list[dict], events: list[dict],
-                     window_s: float = TRACE_MATCH_S) -> tuple[list[dict], list[dict]]:
+def link_foot_traces(trace_rows: list[dict], events: list[dict], window_s: float = TRACE_MATCH_S,
+                     repeat_s: float = TRACE_REPEAT_S) -> tuple[list[dict], list[dict]]:
     """발끝 기록을 merge된 흔들림 지점과 연결해 id를 채운다.
 
-    지점 하나의 기록(접지 시각 t_event + 다리)마다, 다리가 같고 시각 차이가 window_s 이하인 흔들림 지점 중
-    가장 가까운 것에 붙인다. 한 지점에는 기록 하나만 붙는다.
-    돌려주는 값: (id를 채운 행들 — id·t 순, 짝이 없는 기록 [{"t_event", "leg", "rows"}])
+    1) 첫 걸음: 걸음 하나의 기록(접지 시각 t_event + 다리)마다, 다리가 같고 시각 차이가 window_s 이하인
+       흔들림 지점 중 가장 가까운 것에 붙인다. 한 지점에는 첫 걸음 하나만 붙는다.
+    2) 다시 밟은 걸음: 남은 기록 중 첫 걸음이 붙은 지점의 다른 발이 첫 걸음 뒤 repeat_s 안에 딛은 것을
+       같은 블록의 걸음으로 붙인다 (뒷발이 앞발 자리를 다시 밟는다). 같은 발이 다시 붙지는 않는다.
+    돌려주는 값: (id를 채운 행들 — id·접지 시각·t 순, 짝이 없는 기록 [{"t_event", "leg", "rows"}])
     """
     groups: dict[str, list[dict]] = {}
     for r in trace_rows:
@@ -613,9 +731,22 @@ def link_foot_traces(trace_rows: list[dict], events: list[dict],
         used_k.add(key)
         used_e.add(eid)
         linked += [{**r, "id": eid} for r in groups[key]]
+    first = {r["id"]: r for r in linked}  # 지점 id → 첫 걸음 행
+    legs = {eid: {r["leg"]} for eid, r in first.items()}
+    for key, rows in sorted(groups.items(), key=lambda kv: kv[1][0].get("t_event") or 0):
+        r0 = rows[0]
+        if key in used_k or r0.get("t_event") is None:
+            continue
+        near = [(r0["t_event"] - f["t_event"], eid) for eid, f in first.items()
+                if r0["leg"] not in legs[eid] and 0 < r0["t_event"] - f["t_event"] <= repeat_s + _EPS]
+        if near:
+            eid = min(near)[1]
+            used_k.add(key)
+            legs[eid].add(r0["leg"])
+            linked += [{**r, "id": eid} for r in rows]
     unmatched = [{"t_event": rows[0].get("t_event"), "leg": rows[0]["leg"], "rows": len(rows)}
                  for key, rows in groups.items() if key not in used_k]
-    linked.sort(key=lambda r: (r["id"], r["t"]))
+    linked.sort(key=lambda r: (r["id"], r.get("t_event") or 0, r["t"]))
     return linked, unmatched
 
 

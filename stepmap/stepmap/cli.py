@@ -19,15 +19,24 @@ def _thresholds(config_path: str) -> dict | None:
     return thresholds_from_config(load_config(config_path))
 
 
+def _block_size(config_path: str) -> float:
+    """config.yaml의 block.size_m (없으면 기본 0.3 m)."""
+    from .events import BLOCK_SIZE_M, block_size_from_config, load_config
+
+    return block_size_from_config(load_config(config_path)) if Path(config_path).exists() else BLOCK_SIZE_M
+
+
 def cmd_demo(args: argparse.Namespace) -> int:
     from .demo import SESSION, generate
     from .events import display_meters, path_length
 
-    traj, events = generate(args.output, _thresholds(args.config), split=args.split, photos_dir=args.photos)
+    traj, events = generate(args.output, _thresholds(args.config), split=args.split, photos_dir=args.photos,
+                            block_size=_block_size(args.config))
     out = Path(args.output)
     print(f"세션 {SESSION}: 궤적 {len(traj)}점 ({display_meters(path_length(traj))} m), 측정 지점 {len(events)}개")
     print(f"  -> {out / 'trajectory.csv'}")
     print(f"  -> {out / 'events.csv'}")
+    print(f"  -> {out / 'blocks.csv'} (밟은 블록)")
     for e in events:
         if e["image"]:
             print(f"  사진 {e['image']} → {e['id']} ({e['kind']} {e['value']}, {e['level']})")
@@ -126,7 +135,7 @@ def cmd_map(args: argparse.Namespace) -> int:
             "robot": str((cfg.get("robot") or {}).get("name") or "")}
     try:
         out = write_dashboard(args.events, args.trajectory, args.output, _thresholds(args.config), meta, args.traces,
-                              args.history)
+                              args.history, args.blocks, _block_size(args.config))
     except (FormatError, MissingLatLon) as e:
         print(f"stepmap map: {e}", file=sys.stderr)
         return 1
@@ -160,6 +169,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="판정 기준·세션 정보(report.area, robot.name)를 읽을 설정 파일 (기본: config.yaml)")
     p.add_argument("--traces", metavar="CSV",
                    help="흔들림 지점 발끝 기록 (기본: events.csv와 같은 폴더의 foot_traces.csv, 없으면 그래프 대신 안내)")
+    p.add_argument("--blocks", metavar="CSV",
+                   help="밟은 블록 요약 (기본: events.csv와 같은 폴더의 blocks.csv, 없으면 밟은 블록 수는 발끝 기록 기준)")
     p.add_argument("--history", metavar="DIR",
                    help="지난 점검 폴더 (기본: events.csv와 같은 폴더의 history/, 날짜별 하위 폴더에 events.csv·trajectory.csv)")
     p.set_defaults(func=cmd_map)

@@ -18,7 +18,7 @@ from .events import parse_image_mark
 
 PHOTO_SHORT_SIDE = 720
 PHOTO_DIR = "photos"
-LEVEL_COLOR = {"danger": "#d03b3b", "warn": "#fab219", "ok": "#0ca30c"}  # 대시보드·신고서 상태 색
+LEVEL_COLOR = {"danger": "#EF6461", "warn": "#F7B558", "ok": "#A5D48C"}  # 대시보드·신고서 등급 색 (위험·주의·정상)
 LEG_NAMES = {"FR": "앞 오른발", "FL": "앞 왼발", "RR": "뒤 오른발", "RL": "뒤 왼발"}
 # 사진 아래 설명 (데이터에 넣지 않고 종류에 따라 자동으로 붙인다)
 PHOTO_CAPTIONS = {"loose": "외관 정상, 발 접촉으로 확인"}

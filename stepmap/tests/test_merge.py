@@ -208,3 +208,15 @@ def test_link_one_trace_per_event_and_window():
     linked, unmatched = link_foot_traces(trace(10.1) + trace(10.4), events)
     assert {r["id"] for r in linked} == {"ev_0001"} and len(unmatched) == 1  # 가까운 기록 하나만
     assert link_foot_traces(trace(10.6), events)[0] == []  # 0.5초 밖
+
+
+def test_link_repeat_step_on_same_block():
+    """첫 걸음이 붙은 지점의 다른 발이 2초 안에 다시 밟은 걸음은 같은 블록으로 붙는다."""
+    events = [loose("ev_0001", 10.0, leg="FL"), loose("ev_0002", 30.0, leg="FR")]
+    rows = trace(10.0) + trace(10.9, leg="RL") + trace(11.0, leg="FL") + trace(13.0, leg="RR") + trace(29.5, leg="RR")
+    linked, unmatched = link_foot_traces(rows, events)
+    steps = sorted({(r["id"], r["t_event"], r["leg"]) for r in linked})
+    assert steps == [("ev_0001", 10.0, "FL"), ("ev_0001", 10.9, "RL")]
+    # 같은 발 다시(11.0 FL), 2초 밖(13.0), 첫 걸음보다 앞(29.5)은 짝 없음
+    assert {(u["t_event"], u["leg"]) for u in unmatched} == {(11.0, "FL"), (13.0, "RR"), (29.5, "RR")}
+    assert [(r["id"], r["t_event"]) for r in linked] == sorted((r["id"], r["t_event"]) for r in linked)  # id·접지 시각 순
