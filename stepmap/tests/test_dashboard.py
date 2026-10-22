@@ -1,6 +1,7 @@
 import json
 import math
 import re
+from pathlib import Path
 
 import pytest
 
@@ -48,23 +49,30 @@ def test_leaflet_pinned_and_attribution(page):
 
 
 
-def test_map_background_toggle(page):
-    """지도 배경은 페이지 테마와 따로: 기본 밝은 지도, 브라우저에 기억, 어두운 지도는 반전 톤."""
-    assert 'id="mapcard" data-map="light"' in page  # 기본: 밝은 지도
-    assert '<button type="button" data-map="light" aria-pressed="true">밝은 지도</button>' in page
-    assert '<button type="button" data-map="dark" aria-pressed="false">어두운 지도</button>' in page
-    assert 'const MAP_KEY = "stepmap-map"' in page
+def test_light_fixed_and_attribution_corner(page):
+    """화면은 라이트, 지도는 밝은 지도로 고정: 지도 밝기·다크 모드 버튼 없음, 저장된 다크 설정도 읽지 않는다.
+    종합 현황 저작자 표시는 화면 가장 아래 오른쪽 구석(오른쪽 8px, 아래 4px, 블록 줄보다 위 레이어, 11px 한 줄, 반투명 흰 배경)."""
+    assert '<html lang="ko" data-theme="light">' in page and 'id="mapcard" data-map="light"' in page
+    for gone in ("theme-toggle", "tb-map", ">밝은 지도<", ">어두운 지도<", "stepmap-theme", "stepmap-map", "applyTheme", "localStorage.getItem"):
+        assert gone not in page, gone
+    assert '<div class="map-attr" id="map-attr"></div>' in page
+    assert '$("map-attr").append(map.attributionControl.getContainer());' in page.split("function startTiles() {", 1)[1]
+    assert ".map-attr { position: fixed; right: 8px; bottom: 4px; z-index: 750;" in page  # 블록 줄(z-index 700)보다 위, 아래 여백 24px 안
+    attr = page.split(".map-attr .leaflet-control-attribution {", 1)[1].split("}", 1)[0]
+    assert "font-size: 11px" in attr and "white-space: nowrap" in attr and "background: rgb(255 255 255 / 0.86)" in attr
+    assert "line-height: 14px" in attr and "padding: 1px 6px" in attr  # 높이 16px < 아래 여백 24px - 4px
+    assert _contrast("#55505A", "#DBDBDB") >= 4.5  # 검정 위 0.86 흰 배경에서도
+    assert "#page-home .leaflet-bottom { bottom: 286px; }" in page  # 확대 버튼은 블록 줄 바로 위
     light = page.split('.mapcard[data-map="light"] {', 1)[1].split("}", 1)[0]
-    assert "--map-bg: #ECECEC" in light and "--map-grid: #FFFFFF" in light and "--map-park: #CDEBDD" in light
-    assert "--m-ring: #FFFFFF" in light and "--m-warn: #F7B558" in light  # 흰 테두리, 새 등급 색
-    assert "var(--m-${e.level})" in page and "var(--m-ring)" in page  # 마커는 지도 배경별 색을 쓴다
+    assert "--map-bg: #EDEDED" in light and "--map-grid: #FFFFFF" in light and "--map-park: #BFEBD6" in light
+    assert "var(--m-${e.level})" in page and "var(--m-ring)" in page
 
 
 def test_home_no_route_drawn_and_session(page):
     """종합 현황 지도에는 이동 경로·출발·도착을 그리지 않는다 (지도·평면 지도 모두). 거리 계산과 범위용 데이터는 남긴다."""
     script = page.split("<script>", 1)[1]
     home_map = script.split("function startTiles() {", 1)[1].split("function fallback(reason) {", 1)[0]
-    assert "L.polyline" not in home_map  # 점검 이력 지도(그날 경로)와 다르게 종합 현황 지도는 경로를 그리지 않는다
+    assert "L.polyline" not in home_map  # 점검 이력 지도(그날 경로)와 다르게 종합 현황 지도는 경로·연결선을 그리지 않는다
     for gone in ("route-key", "ep-icon", "endSides", "END_LABEL"):
         assert gone not in page, gone
     legend = script.split("종합 현황: 범례", 1)[1].split("// ----", 1)[0]
@@ -74,10 +82,10 @@ def test_home_no_route_drawn_and_session(page):
     assert "DATA.trajectory_xy" in script  # 지점이 없을 때만 쓰는 범위 대비
     # 지도 범위: 전체 측정 지점 기준 한 번 (판정 필터와 무관)
     assert "L.latLngBounds(DATA.events.length ? DATA.events.map((e) => [e.lat, e.lon]) : DATA.trajectory)" in page
-    assert "map.fitBounds(bounds.pad(0.35))" in page
-    assert "const pts = DATA.events.length ? DATA.events.map((e) => [e.x, e.y]) : DATA.trajectory_xy;" in page
+    assert "map.fitBounds(bounds, { paddingTopLeft: pad.tl, paddingBottomRight: pad.br, animate: false });" in page
+    assert "const pts = (DATA.events.length ? DATA.events.map((e) => [e.x, e.y]) : DATA.trajectory_xy).concat(ROBOT_XY ? [ROBOT_XY] : []);" in page
     assert 'id="tb-date"' in page  # 위쪽 바 오른쪽: 마지막 점검 날짜
-    assert "@media (min-width: 1260px) and (min-height: 700px)" in page  # 데스크톱: 지도 = 남은 높이
+    assert "body:has(#page-home:not([hidden])) { overflow: hidden; }" in page  # 1260px 이상: 지도 전체, 페이지 스크롤 없음
 
 
 def level_buttons(page):
@@ -112,7 +120,7 @@ def test_plane_fallback_embedded(built, page):
     assert all("x" in e and "y" in e for e in data["events"])
     # 타일 실패·대체 이미지·응답 없음은 다음 제공처, 마지막 제공처도 안 되면 평면 지도. Leaflet 미로딩은 바로 평면
     for reason in ('next("tileerror", at)', '"placeholder"', 'next("timeout", at)', 'fallback("leaflet")',
-                   "attachTiles(map, 19, () => gen === state.gen && state.mode === \"tiles\", (reason) => fallback(reason));"):
+                   "attachTiles(map, 19, () => gen === state.gen && state.mode === \"tiles\", (reason) => fallback(reason), () => $(\"mapcard\").dataset.map);"):
         assert reason in page, reason
 
 
@@ -138,9 +146,9 @@ def test_missing_latlon_raises(tmp_path):
 
 
 def test_screen_sections(page):
-    for sid in ("nav", "tb-date", "theme-toggle",
+    for sid in ("nav", "tb-date",
                 "page-home", "page-detail", "page-history",
-                "k-dist", "k-visual", "k-loose", "k-ok", "map", "plane", "retry", "legend", "dpanel"):
+                "map", "plane", "retry", "legend", "hrow", "hblocks", "rc-name", "rc-prev", "rc-next"):
         assert f'id="{sid}"' in page, sid
     assert "지도 다시 불러오기" in page
     assert "휠체어 회피 기준" in page
@@ -226,7 +234,6 @@ def test_card_distance_is_path_length_rounded_once(built, page):
     # 화면 표시는 공용 함수 putDistance의 Math.round 한 번 (반올림을 두 번 하면 912.47 → 912.5 → 913).
     # 종합 현황 KPI와 점검 이력 요약이 같은 함수를 쓴다
     assert "node.textContent = Math.round(meters).toLocaleString" in page
-    assert 'putDistance($("k-dist"), DATA.distance_m)' in page
     assert 'putDistance($("h-k-dist"), i >= 0 ? DATES[i].meters : DATA.distance_m)' in page  # 점검 이력: display_meters 값
     assert page.count("Math.round(DATA.distance_m)") == 0
     card = math.floor(data["distance_m"] + 0.5)  # JS Math.round와 같은 규칙
@@ -310,7 +317,6 @@ def test_history_page_structure(page):
     for label in ("판정", "종류", "값", "기준", "측정 방식", "위도·경도", "시각", "보기"):
         assert f'label: "{label}"' in page, label
     assert 'const SOURCE = { camera: "카메라", foot: "발", "camera+foot": "교차" };' in page
-    assert '<small>카메라</small>' in page and "카메라: 단차·경사·균열" not in page  # KPI 보조 라벨 짧게
 
 
 def test_history_csv_cells_match_events_csv(built, page):
@@ -337,20 +343,101 @@ def test_history_report_link_only_when_report_exists(built, tmp_path):
 
 # --- 종합 현황: 지도 옆 상세 패널 ------------------------------------------------------------
 
-def test_home_detail_panel_replaces_issue_list(page):
-    """위험·주의 목록 박스 대신 지도 옆 상세 패널. 마커를 누르면 #home/<id>로 패널을 연다."""
-    assert '<aside class="dpanel" id="dpanel" aria-label="지점 상세"></aside>' in page
-    for gone in ('id="issue-list"', 'id="issues-count"', "위험·주의 지점"):
-        assert gone not in page, gone
-    assert "location.replace(`#home/${e.id}`)" in page  # 페이지 이동 대신 같은 페이지에서 선택
-    assert "지도에서 지점을 누르면 사진과 근거가 여기에 표시돼요" in page
-    assert 'function closePanel() { location.replace("#home"); }' in page
+def test_home_blocks_structure(page):
+    """화면 아래 블록 줄: 반투명 회색 틀(안쪽 여백 8px, 모서리 22px) 안에 [로봇 카드][사진][측정값 / 기준 대비][근거].
+    틀은 처음엔 로봇 카드 크기만, 지점을 고르면 오른쪽으로 0.25초에 늘어난다 (움직임 줄이기 설정이면 바로)."""
+    assert '<div class="hrow" id="hrow" aria-label="점검 로봇과 지점 근거">' in page
+    assert ".hrow { display: flex; gap: 8px; padding: 8px; border-radius: 22px; background: rgb(54 50 54 / 0.08); }" in page
+    assert ("#page-home .hrow { position: fixed; left: 24px; bottom: 24px; z-index: 700; height: 250px; width: calc(var(--rc-w) + 16px);\n"
+            "                       max-width: calc(100vw - 48px); transition: width 0.25s ease-out; }") in page
+    assert "#page-home .hrow.open { width: calc(100vw - 48px); }" in page
+    assert "@media (min-width: 1260px) and (prefers-reduced-motion: reduce) { #page-home .hrow { transition: none; } }" in page
+    assert "#page-home .leaflet-bottom { bottom: 286px; }" in page  # 확대 버튼·저작자 표시는 블록 줄 위
+    assert "return { tl: [48, top], br: [72, $(\"hrow\").offsetHeight + 24 + 32] };" in page  # 지도 범위 여백 = 블록 줄 높이
+    assert 'grid-template-areas: "photo num why" "photo ratio why";' in page  # 측정값·기준 대비는 위아래
+    blocks = page.split("function renderBlocks() {", 1)[1].split("\n  }\n", 1)[0]
+    for part in ('el("div", "glass hb hb-photo")', 'el("div", "glass hb hb-num")', 'el("div", "glass hb hb-ratio")', 'el("div", "glass hb hb-why")',
+                 'el("span", "t", "측정값")', '`위험 기준 ${withUnit(th[1], unit)}`', 'el("span", "t", "기준 대비")', '"기준 이내"',
+                 "halfGauge(e.value / span, e.level, [[th[0] / span, \"var(--warn)\"], [th[1] / span, \"var(--danger)\"]]",
+                 '`기준 ${criterion(e)}`', "Number(e.lat).toFixed(6)", "fmtDateTimeS(e.t)", "METHOD_ICONS", 'el("span", "hb-cf", e.confirm)',
+                 '`추가 침하 ${fmtNum(e.value, unit)} mm`', 'el("button", "hb-close")', 'close.addEventListener("click", closePanel);',
+                 'tag.append(lvBadge(e.level), el("span", null, KIND[e.kind].label), el("span", "id", e.id));', "acts.append(go, close);",
+                 "box.append(ph, nb, rb, wb);"):
+        assert part in blocks, part
+    assert "pattern" in page.split("function halfGauge(", 1)[1].split("\n  }\n", 1)[0]  # 등급 색 + 빗금
+    photo = page.split("function blockPhoto(e, onMissing) {", 1)[1].split("\n  }\n", 1)[0]
+    assert 'el("span", "hb-mk", "발 접촉 위치")' in photo and "stroke-dasharray:7 5" in photo  # 흔들림: 점선 동그라미 + 작은 라벨
+    assert ("font-size: 11px" in page.split(".hb-mk {", 1)[1].split("}", 1)[0]
+            and "background: rgb(255 255 255 / 0.86); color: #363236;" in page.split(".hb-mk {", 1)[1].split("}", 1)[0])
+    assert ".hblocks.in > .hb { animation: hb-up 0.25s ease-out both; }" in page
+    assert "@media (prefers-reduced-motion: reduce) { .hblocks.in > .hb { animation: none; } }" in page
     assert 'if (state.page === "home" && state.sel && !document.querySelector("dialog[open]")) closePanel();' in page  # Esc
-    assert "byId[state.sel.id].level === lv) closePanel();" in page  # 필터로 숨기면 닫기
-    assert '.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px;' in page
-    assert "@media (max-width: 1259px)" in page
-    assert "state.map.invalidateSize({ animate: false });  // 패널" in page
-    assert "stroke:#FFFFFF;stroke-width:3" in page  # 선택된 마커: 흰색 3px 링
+    assert "else if (state.sel) closePanel(); });" in page  # 지도 빈 곳
+    assert 'class="mk-sel"' in page  # 고른 마커 선택 표시
+
+
+def test_home_robot_marker_is_last_trajectory_point(built, page):
+    """로봇개 마커 = 이동 궤적 마지막 점 (Leaflet·평면 지도 모두). 경로 선은 그리지 않는다."""
+    data = embedded(page)
+    traj = read_trajectory(built / "trajectory.csv")
+    assert data["trajectory"][-1] == [round(traj[-1]["lat"], 7), round(traj[-1]["lon"], 7)]
+    assert data["trajectory_xy"][-1] == [round(traj[-1]["x"], 2), round(traj[-1]["y"], 2)]
+    assert "const ROBOT_LL = DATA.trajectory.length ? DATA.trajectory[DATA.trajectory.length - 1] : null;" in page
+    assert "const ROBOT_XY = DATA.trajectory_xy.length ? DATA.trajectory_xy[DATA.trajectory_xy.length - 1] : null;" in page
+    assert 'L.marker(ROBOT_LL, { icon: L.divIcon({ className: "robot-mk"' in page
+    assert 'rb.setAttribute("transform", `translate(${(X(ROBOT_XY[0]) - 18).toFixed(1)},${(Y(ROBOT_XY[1]) - 18).toFixed(1)})`);' in page
+    assert ".robot-mk .pulse { background: rgb(54 50 54 / 0.28); animation: robot-pulse 2.6s ease-out infinite; }" in page
+    assert "@media (prefers-reduced-motion: reduce) {\n    .robot-mk .pulse, #plane .robot-pulse { animation: none;" in page
+    home = page.split("function startTiles() {", 1)[1].split("function fallback(reason) {", 1)[0]
+    assert "L.polyline" not in home  # 경로 선·연결선 없음
+
+
+def test_home_default_card_and_next_order(built, page):
+    """기본 카드 = 로봇이 가장 최근에 찾은 위험 지점. "다음" 두 칸 = 위험→주의, 같은 판정은 exceed_ratio 큰 순으로 지금 지점 다음."""
+    from stepmap.dashboard import home_cards
+    data = embedded(page)
+    events = read_events(built / "events.csv")
+    danger = [e for e in events if e["level"] == "danger"]
+    assert data["home"]["default"] == max(danger, key=lambda e: e["t"])["id"] == "ev_0014"
+    rank = {"danger": 2, "warn": 1}
+    issues = sorted((e for e in events if e["level"] in rank),
+                    key=lambda e: (-rank[e["level"]], -exceed_ratio(e["kind"], e["level"], e["value"], DEFAULT_THRESHOLDS), e["t"]))
+    order = data["home"]["order"]
+    assert order == [e["id"] for e in issues] and len(order) == 9
+    assert order[:4] == ["ev_0012", "ev_0014", "ev_0009", "ev_0013"]  # 위험: 2.4배, 1.4배, 1.1배, 1.1배
+    i = order.index("ev_0014")
+    assert [order[(i + 1) % 9], order[(i + 2) % 9]] == ["ev_0009", "ev_0013"]  # 기본 카드의 "다음" 두 칸
+    assert "order[(i + dir + order.length) % order.length]" in page  # 화면 ← → 도 같은 순서 (끝이면 처음으로)
+    # 위험이 없으면 가장 최근 주의, 둘 다 없으면 없음
+    warn_only = [{**e, "level": "warn" if e["level"] == "danger" else e["level"]} for e in events if e["level"] != "danger"]
+    assert home_cards(warn_only, DEFAULT_THRESHOLDS)["default"] == max(warn_only, key=lambda e: e["t"] if e["level"] == "warn" else -1)["id"]
+    assert home_cards([e for e in events if e["level"] == "ok"], DEFAULT_THRESHOLDS) == {"order": [], "default": None}
+
+
+def test_home_glass_style_and_fallback(page):
+    """유리 카드: 반투명 바탕 + 흐림. 흐림을 못 쓰거나 투명도 줄이기 설정이면 불투명(라이트 #FFFFFF, 다크 #2A262A).
+    지도 가장 어두운 곳(검정)·가장 밝은 곳(흰색) 위에서도 글자·보조 글자 4.5:1 이상."""
+    css = page.split("<style>", 1)[1].split("</style>", 1)[0]
+    assert "@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {\n    .glass, .nav, .icon-btn, #page-home .retry { background: var(--glass-solid); }" in css
+    assert "@media (prefers-reduced-transparency: reduce) {\n    .glass, .nav, .icon-btn, #page-home .retry { background: var(--glass-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }" in css
+    assert "backdrop-filter: blur(18px) saturate(1.4)" in css and ".frame { padding: 6px; border-radius: 22px; background: var(--frame-bg); }" in css
+    light = css.split(":root { --glass-bg:", 1)[1].split("}", 1)[0]
+    dark = css.split(':root[data-theme="dark"] { --glass-bg:', 1)[1].split("}", 1)[0]
+    assert "--glass-solid: #FFFFFF" in light and "--glass-solid: #2A262A" in dark
+
+    def alpha(block):
+        return float(re.search(r"rgb\((\d+) (\d+) (\d+) / ([\d.]+)\)", block).group(4))
+
+    def over(fg_hex, a, bg):
+        fg = [int(fg_hex[k:k + 2], 16) for k in (1, 3, 5)]
+        return "#" + "".join(f"{round(f * a + b * (1 - a)):02X}" for f, b in zip(fg, bg))
+    la, da = alpha(light), alpha(dark)
+    g_l = re.search(r"--glass-muted: (#\w{6})", light).group(1)
+    g_d = re.search(r"--glass-muted: (#\w{6})", dark).group(1)
+    for bg in ((0, 0, 0), (255, 255, 255)):
+        lb, db = over("#FFFFFF", la, bg), over("#1F1C1F", da, bg)
+        assert _contrast("#363236", lb) >= 4.5 and _contrast(g_l, lb) >= 4.5, (bg, lb)
+        assert _contrast("#F2F0F2", db) >= 4.5 and _contrast(g_d, db) >= 4.5, (bg, db)
 
 
 def test_home_detail_data_embedded(built, page):
@@ -369,8 +456,8 @@ def test_home_detail_data_embedded(built, page):
 
 def test_home_detail_link_targets(page):
     """"자세히 보기"와 점검 이력 지점 목록: 모든 지점이 #detail/<id> (방문 기록에 남겨 뒤로 가기 → #history/<날짜>)."""
-    panel = page.split("function renderPanel() {", 1)[1].split("\n  }\n", 1)[0]
-    assert 'el("a", "btn primary", "자세히 보기")' in panel and "more.href = detailHref(e);" in panel
+    blocks = page.split("function renderBlocks() {", 1)[1].split("\n  }\n", 1)[0]
+    assert 'const go = el("a", "hb-go");' in blocks and "go.href = detailHref(e);" in blocks  # ↗ 자세히 보기
     assert "if (newest) go.href = detailHref(e);" in page  # 점검 이력 행 (링크 → hash 이동, replace 아님)
     assert "const hOpen = (e) => { hideTip(); location.hash = detailHref(e); };" in page
 
@@ -518,7 +605,7 @@ def test_home_marker_shapes_by_kind(page):
 
 def test_home_shape_legend_in_html(page):
     """필터 버튼 옆 회색 모양 범례: ● 노면 형상  ◆ 흔들림 (판정 색을 쓰지 않는다)."""
-    legend = page.split('<div class="legend" id="legend"', 1)[1].split("</div>\n        </div>", 1)[0]
+    legend = page.split('<div class="glass hfilter legend" id="legend"', 1)[1].split("</div>\n      </div>", 1)[0]
     assert '<div class="shape-legend" id="shape-legend" role="group" aria-label="마커 모양">' in legend
     assert re.findall(r'<span class="item"><svg class="shp"[^>]*>(?:<circle|<rect)[^<]*</svg>([^<]+)</span>', legend) == ["노면 형상", "흔들림"]
     assert legend.index('id="lv-filter"') < legend.index('id="shape-legend"')
@@ -590,3 +677,161 @@ def test_tile_providers_and_attribution(page):
     assert tiles.index('name: "carto"') < tiles.index('name: "topo"')
     assert ':root[data-tiles="topo"] .mapcard[data-map="light"] { --tile-filter: grayscale(1)' in page
     assert len(re.findall(r"attachTiles\(map, \d+,", page)) == 3  # 종합 현황·점검 이력·검사 결과 위치 지도 모두 같은 차례
+
+
+
+# --- 종합 현황: 근거 카드·점선 연결, 아래 카드 줄 없음 ---------------------------------------------
+
+def test_home_blocks_hidden_until_point_chosen(page):
+    """처음 열면 로봇 카드만 있고 지점 블록은 없다. 지점을 고르면(#home/<id>) 블록이 보인다 (새로고침해도)."""
+    assert '<div class="hblocks" id="hblocks" aria-label="지점 근거" aria-live="polite" hidden></div>' in page
+    assert "const cardEvent = () => (state.sel && byId[state.sel.id]) || null;" in page
+    blocks = page.split("function renderBlocks() {", 1)[1].split("\n  }\n", 1)[0]
+    assert "box.hidden = !e;" in blocks and '$("hrow").classList.toggle("open", !!e);' in blocks
+    assert "renderBlocks();" in page.split("function route() {", 1)[1]  # 주소에 지점이 있으면 블록을 연다
+    for gone in ("dstack", "robot-link", "renderCard", "placeCard", "ensureBoth", "dlink"):  # 로봇개 옆 근거 카드·연결 점선 없음
+        assert gone not in page, gone
+
+
+def test_home_blocks_content_matches_point(built, page):
+    """블록 내용 = 그 지점 데이터: 측정값, exceed_ratio, criterion_text, 사진 경로 (마커·← → 모두 pick → #home/<id> → renderBlocks)."""
+    data = embedded(page)
+    ev = {e["id"]: e for e in data["events"]}
+    files = {e["id"]: e for e in read_events(built / "events.csv")}
+    e12, raw = ev["ev_0012"], files["ev_0012"]
+    assert e12["value"] == raw["value"] == 4.8 and e12["unit"] == "cm"
+    assert e12["ratio"] == round(exceed_ratio("step", "danger", 4.8, DEFAULT_THRESHOLDS), 4) == 2.4
+    assert e12["criterion"] == criterion_text("step", "danger", DEFAULT_THRESHOLDS)
+    blocks = page.split("function renderBlocks() {", 1)[1].split("\n  }\n", 1)[0]
+    assert "fmtNum(e.value, unit)" in blocks and "ratio.toFixed(1)" in blocks and "criterion(e)" in blocks
+    assert "blockPhoto(e, () => btn.replaceWith(noPhoto()))" in blocks and "img.src = p.src;" in page  # 사진: e.photo.src
+    pick = page.split("const pick = (e) => {", 1)[1].split("\n  };\n", 1)[0]
+    assert "location.replace(`#home/${e.id}`);" in pick and "ensureVisible(e);" in pick
+
+
+def test_home_prev_next_order(page):
+    """← →: 위험→주의(같은 판정은 exceed_ratio 큰 순)로 이전·다음. 아무것도 고르지 않았으면 →는 첫 위험 지점, ←는 마지막."""
+    order = embedded(page)["home"]["order"]
+    step = page.split("function stepPick(dir) {", 1)[1].split("\n  }\n", 1)[0]
+    assert "const i = state.sel ? order.indexOf(state.sel.id) : -1;" in step
+    assert "order[dir > 0 ? 0 : order.length - 1]" in step and "order[(i + dir + order.length) % order.length]" in step
+    assert "pick(e);" in step  # 지도 마커 누르기와 같은 동작
+
+    def step_py(sel, d):  # 화면 stepPick과 같은 규칙
+        i = order.index(sel) if sel in order else -1
+        return order[0 if d > 0 else -1] if i < 0 else order[(i + d) % len(order)]
+    assert step_py(None, 1) == order[0] == "ev_0012"
+    assert step_py(None, -1) == order[-1]
+    assert [step_py("ev_0012", 1), step_py("ev_0014", 1), step_py("ev_0012", -1)] == ["ev_0014", "ev_0009", order[-1]]
+    assert 'id="rc-prev"' in page and '$("rc-next").addEventListener("click", () => stepPick(1));' in page
+
+
+def test_home_robot_card(built, tmp_path):
+    """로봇 카드: 이름(robot.name)은 주황 칸 + 차콜 글자, 상태 배지 없음. 모델·배터리·센서·점검 일시·이동 거리(display_meters).
+    robot.png가 없거나 투명 배경이 아니면 직접 그린 그림."""
+    from PIL import Image
+    meta = {"area": "제주시 노형동·연동", "robot": "Go2-01", "model": "Unitree Go2 EDU", "sensors": ["LiDAR", "깊이 카메라", "발 접촉"],
+            "battery": 72}
+    out = tmp_path / "a" / "d.html"
+    html = write_dashboard(built / "events.csv", built / "trajectory.csv", out, meta=meta).read_text(encoding="utf-8")
+    data = embedded(html)
+    assert (data["robot"], data["robot_model"], data["robot_sensors"], data["robot_battery"]) == (
+        "Go2-01", "Unitree Go2 EDU", ["LiDAR", "깊이 카메라", "발 접촉"], 72)
+    assert '$("rc-name").textContent = DATA.robot || "점검 로봇";' in html and '$("rc-model").textContent = DATA.robot_model || "—";' in html
+    assert data["meters"] == display_meters(path_length(read_trajectory(built / "trajectory.csv")))
+    assert data["robot_photo"] is None and not (out.parent / "photos" / "robot.png").exists()
+    assert '<svg id="rc-draw" viewBox="0 0 220 170" aria-hidden="true">' in html  # 사진이 없으면 그림
+    assert '<b class="rc-name" id="rc-name"></b>' in html
+    assert "border-radius: 12px; background: #F7B558; color: #363236; font-size: 22px;" in html
+    assert _contrast("#363236", "#F7B558") >= 4.5
+    assert "rc-done" not in html and "점검 완료" not in html  # 상태 배지 없음
+    for sid, label in (("rc-model", "모델:"), ("rc-sensors", "센서:"), ("rc-when", "점검 일시:"), ("rc-dist", "이동 거리:")):
+        assert f'<dt>{label}</dt><dd class="chip-bg" id="{sid}"></dd>' in html
+    assert '<dt id="rc-battery-k">배터리:</dt><dd class="chip-bg" id="rc-battery"></dd>' in html
+    card = html.split("// 로봇 카드: 이름", 1)[1].split("\n  }\n", 1)[0]
+    assert '$("rc-battery-k").hidden = $("rc-battery").hidden = !hasBattery;' in card
+    assert 'if (hasBattery) $("rc-battery").textContent = `${DATA.robot_battery}%`;' in card
+    assert '`${DATA.meters.toLocaleString("ko-KR")} m`' in card
+    assert ".rc-art::after {" in html  # 발밑 옅은 타원 그림자
+    # 투명 배경 robot.png만 사본을 photos/robot.png로 (투명 배경 유지)
+    im0 = Image.new("RGBA", (900, 600), (0, 0, 0, 0))
+    im0.paste((80, 80, 80, 255), (100, 100, 400, 300))  # 가운데 로봇(300×200) + 투명 여백
+    im0.save(built / "robot.png")
+    try:
+        out2 = tmp_path / "b" / "d.html"
+        data2 = embedded(write_dashboard(built / "events.csv", built / "trajectory.csv", out2, meta=meta).read_text(encoding="utf-8"))
+        assert data2["robot_photo"] == "photos/robot.png"
+        with Image.open(out2.parent / "photos" / "robot.png") as im:
+            assert im.mode == "RGBA" and im.size == (300, 200)  # 투명 여백을 잘라 로봇만
+        # 사진: 카드 안쪽 높이의 약 92%, 오른쪽 아래(아래 10px) 카드 안, 칩과 12px 이상 떨어지게 최대로, 그림자 = 사진 폭의 70%
+        assert ".rc-art.photo { right: 44px; bottom: 10px; width: 45%; height: calc((100% - 32px) * 0.92); opacity: 1; }" in html
+        shadow = html.split(".rc-art.photo::after {", 1)[1].split("}", 1)[0]
+        assert "width: calc(var(--shot-w, 100%) * 0.7)" in shadow and "rgb(54 50 54 / 0.12)" in shadow and "blur(8px)" in shadow
+        fit = html.split("const fitRobotPhoto = () => {", 1)[1].split("\n      };", 1)[0]
+        assert "const room = box.width - (chipRight + 13);" in fit and "const R = Math.max(16, Math.min(44, room - want));" in fit
+        assert "const w = Math.max(0, Math.min(want, room - R));" in fit and "0.45" not in fit
+        assert ".rc-top { position: relative; z-index: 1;" in html and ".rc-art { position: absolute; z-index: 0;" in html  # 버튼이 사진 위
+        # 배경이 있는 그림(카드 캡처 등)은 쓰지 않고 그림으로 대체, 지난 사본도 지운다
+        Image.new("RGB", (900, 600), (255, 255, 255)).save(built / "robot.png")
+        data3 = embedded(write_dashboard(built / "events.csv", built / "trajectory.csv", out2, meta=meta).read_text(encoding="utf-8"))
+        assert data3["robot_photo"] is None and not (out2.parent / "photos" / "robot.png").exists()
+    finally:
+        (built / "robot.png").unlink()
+
+
+def test_home_robot_battery_hidden_without_value(built, tmp_path):
+    """config robot.battery가 없거나 숫자가 아니면 None → 배터리 줄 숨김. 있으면 0~100 정수."""
+    for battery, want in ((None, None), ("", None), ("많음", None), (72, 72), ("85", 85), (120, 100)):
+        meta = {"robot": "Go2", "battery": battery}
+        data = embedded(write_dashboard(built / "events.csv", built / "trajectory.csv", tmp_path / "d.html", meta=meta).read_text(encoding="utf-8"))
+        assert data["robot_battery"] == want, battery
+
+
+def test_config_robot_battery():
+    """config.yaml robot.battery: 72 → stepmap map이 로봇 카드에 72%로 넘긴다."""
+    from stepmap.events import load_config
+    cfg = load_config(Path(__file__).resolve().parents[1] / "config.yaml")
+    assert cfg["robot"]["battery"] == 72
+    assert (cfg["robot"]["name"], cfg["robot"]["model"]) == ("Go2-01", "Unitree Go2 EDU")  # 이름 칸과 모델 줄이 다르다
+    import inspect
+    from stepmap import cli
+    assert '"battery": robot.get("battery")' in inspect.getsource(cli.cmd_map)
+
+
+def test_vector_style_palette(page):
+    """벡터 지도 색 덮어쓰기 (OpenFreeMap positron): 밝은·어두운 지도 값, 한국어 이름, 방패·아이콘 숨김."""
+    from stepmap.dashboard import VECTOR_PALETTE
+    assert VECTOR_PALETTE["light"] == {"land": "#EDEDED", "building": "#E4E4E4", "road": "#FFFFFF", "casing": "#E2E2E2",
+                                       "park": "#BFEBD6", "wood": "#A5D48C", "wood_opacity": 0.7, "water": "#D3E2E4", "label": "#A09CA2"}
+    dark = VECTOR_PALETTE["dark"]
+    assert (dark["land"], dark["road"], dark["park"], dark["water"], dark["label"]) == ("#1F1C1F", "#3A363A", "#2C3B33", "#26303A", "#A09CA2")
+    assert f"const MAP_COLORS = {json.dumps(VECTOR_PALETTE)};" in page
+    style = page.split("function recolorStyle(src, c) {", 1)[1].split("\n    return st;", 1)[0]
+    for part in ('pt["background-color"] = c.land', 'pt["fill-color"] = c.park', 'pt["fill-opacity"] = c.wood_opacity',
+                 'pt["fill-color"] = c.water; pt["fill-antialias"] = false;', 'pt["fill-color"] = c.building; pt["fill-outline-color"] = c.building;',
+                 'has(id, "casing", "railway") ? c.casing : c.road', 'scaleZoomValue(pt["line-width"], 1.25)',
+                 'const NAME = ["coalesce", ["get", "name:ko"], ["get", "name"]];', 'delete lay["icon-image"];',
+                 '!has(l.id, "shield")', 'l.id !== "highway-name-path" && l.id !== "highway-name-minor"', 'lay["text-size"] = 11;',
+                 'if (id === "highway-name-major") l.minzoom = 15;', 'if (id === "label_other") l.minzoom = 14;', 'pt["text-color"] = c.label;'):
+        assert part in style, part
+    assert "https://tiles.openfreemap.org/styles/positron" in page
+    # 평면 지도도 같은 색 (바탕·길)
+    light = page.split('.mapcard[data-map="light"] {', 1)[1].split("}", 1)[0]
+    assert "--map-bg: #EDEDED" in light and "--map-grid: #FFFFFF" in light
+
+
+def test_base_map_fallback_order_and_libraries(page):
+    """벡터(OpenFreeMap) → 래스터(CARTO → OpenTopoMap) → 평면 지도. 라이브러리는 정확한 버전 + SRI. 저작자 표시."""
+    tiles = page.split("const TILES = [", 1)[1].split("];", 1)[0]
+    assert tiles.index('name: "vector"') < tiles.index('name: "carto"') < tiles.index('name: "topo"')
+    assert '<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js" integrity="sha384-' in page
+    assert '<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js" integrity="sha384-' in page
+    assert 'href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" integrity="sha384-' in page
+    use = page.split("if (TILES[state.tileIdx].vector) {", 1)[1].split("layer = tileLayer(maxZoom);", 1)[0]
+    for reason in ('next("vector-lib", at)', 'next("timeout", at)', 'next("vector-error", at)', 'next("style", at)'):
+        assert reason in use, reason
+    assert "if (state.tileIdx < TILES.length - 1) { state.tileIdx++; use(); } else onPlane(reason);" in page
+    assert ('&copy; <a href="https://openfreemap.org">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/">OpenMapTiles</a> '
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors') in page
+    assert "attributionControl: { customAttribution: TILES[state.tileIdx].attribution }" in page
+    assert len(re.findall(r"attachTiles\(map, \d+,", page)) == 3  # 검사 결과 위치 지도·점검 이력 지도도 같은 바탕 지도

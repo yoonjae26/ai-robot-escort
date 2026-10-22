@@ -2,7 +2,7 @@
 
 하나의 HTML 안에서 왼쪽 사이드바로 4페이지를 전환한다
 (주소 해시: #home/<id>, #detail/<id>, #history/<YYYY-MM-DD>. 예전 #visual/<id>, #physical/<id>는 #detail/<id>로 연다).
-- 종합 현황: KPI 4개, 큰 지도(판정 색 + 종류 모양, 흔들림은 점선 고리), 판정 필터, 지도 옆 지점 상세 패널
+- 종합 현황: 화면 전체 지도 위에 유리 카드 (판정 필터·모양 범례, 화면 아래 블록 줄: 로봇 카드 + 지점을 누르면 사진·측정값/기준 대비·근거 블록)
 - 검사 결과: 요약 한 줄(위험·주의·밟은 블록 수) + 지점 목록(탭: 전체/노면 형상/흔들림, 판정 칩) + 상세
   (공통: 사진·측정값·근거·위치·시각·방식, 노면 형상: 교차 측정, 흔들림: 발끝 높이 그래프·밟은 횟수·확정/의심) + 위치 지도
 - 점검 이력: 점검 날짜 고르기(칩 + 달력), 그날의 KPI 4개(점검 거리·위험·주의·정상), 그날 지도(이동경로 + 100 m 눈금 +
@@ -12,7 +12,8 @@
 - 지도: 최대 확대에서도 묶인 마커는 누르면 부채꼴로 펼친다
 - 위쪽 가운데 떠 있는 pill 메뉴(1259px 이하는 아래 탭바), 왼쪽 위 로고, 오른쪽 위 테마 전환·마지막 점검 날짜.
   라이트(차콜 강조) 기본, 다크(차콜 계열) 전환 가능. 글꼴: Inter Tight(영문·숫자) + Pretendard(한글)
-- 배경: Leaflet + CARTO light_all(밝은 회색) 타일, 못 받으면 OpenTopoMap + 회색 필터. 지도 배경은 페이지 테마와 따로 고른다
+- 배경: Leaflet + 벡터 지도(MapLibre GL, OpenFreeMap positron 색 덮어쓰기). 못 받으면 래스터(CARTO light_all →
+  OpenTopoMap + 회색 필터) → odom 평면 지도. 지도 배경은 페이지 테마와 따로 고른다
   (밝은 지도 기본 / 어두운 지도: 반전 톤). 판정 색이 배경 도로 색과 섞이지 않게 하기 위함이다.
 - 타일이나 Leaflet을 불러오지 못하거나, 타일이 실제 지도가 아닌 대체 이미지(차단·워터마크)이면
   odom (x, y) 평면 SVG 지도로 자동 전환한다.
@@ -56,6 +57,27 @@ TILE_FALLBACK_MAX_NATIVE_ZOOM = 17
 TILE_FALLBACK_ATTRIBUTION = ('&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | '
                              '&copy; <a href="https://opentopomap.org">OpenTopoMap</a> '
                              '(<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)')
+# 벡터 바탕 지도: Leaflet 위에 MapLibre GL(벡터 타일)을 깐다 (@maplibre/maplibre-gl-leaflet). 버전 고정 + SRI.
+# maplibre-gl 6.x는 ES 모듈과 별도 워커 파일만 있어 file://로 연 HTML에서 쓸 수 없으므로 UMD가 있는 5.x 마지막 판을 쓴다.
+MAPLIBRE_VERSION = "5.24.0"
+MAPLIBRE_JS = f"https://unpkg.com/maplibre-gl@{MAPLIBRE_VERSION}/dist/maplibre-gl.js"
+MAPLIBRE_JS_SRI = "sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp"
+MAPLIBRE_CSS = f"https://unpkg.com/maplibre-gl@{MAPLIBRE_VERSION}/dist/maplibre-gl.css"
+MAPLIBRE_CSS_SRI = "sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK"
+MAPLIBRE_LEAFLET_VERSION = "0.1.4"
+MAPLIBRE_LEAFLET_JS = f"https://unpkg.com/@maplibre/maplibre-gl-leaflet@{MAPLIBRE_LEAFLET_VERSION}/leaflet-maplibre-gl.js"
+MAPLIBRE_LEAFLET_JS_SRI = "sha384-tXYNKOHx4T02jMP7YYCtBxPIv1B5gaA5mcVPBzqMp6d7VzWzxJgI2aWF/nJLrQdS"
+# OpenFreeMap (키 없음) positron 스타일을 받아 아래 색으로 덮어쓴다 (dashboard JS recolorStyle)
+VECTOR_STYLE_URL = "https://tiles.openfreemap.org/styles/positron"
+VECTOR_ATTRIBUTION = ('&copy; <a href="https://openfreemap.org">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/">OpenMapTiles</a> '
+                      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors')
+VECTOR_PALETTE = {
+    # 땅·배경, 건물(아주 옅게), 도로(모든 등급) · 도로 테두리, 공원·녹지, 숲·잔디(+투명도), 물, 지명 글자
+    "light": {"land": "#EDEDED", "building": "#E4E4E4", "road": "#FFFFFF", "casing": "#E2E2E2", "park": "#BFEBD6",
+              "wood": "#A5D48C", "wood_opacity": 0.7, "water": "#D3E2E4", "label": "#A09CA2"},
+    "dark": {"land": "#1F1C1F", "building": "#262226", "road": "#3A363A", "casing": "#2E2A2E", "park": "#2C3B33",
+             "wood": "#2C3B33", "wood_opacity": 0.7, "water": "#26303A", "label": "#A09CA2"},
+}
 # 영문·숫자 글꼴 Inter Tight (Google Fonts 400/500/600). 한글은 Pretendard, 인터넷이 없으면 시스템 글꼴
 INTER_CSS = "https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&display=swap"
 
@@ -68,6 +90,8 @@ class MissingLatLon(ValueError):
 
 
 REPORT_NAME = "report.html"  # stepmap report 기본 출력 이름
+ROBOT_PHOTO = "robot.png"    # 종합 현황 로봇 카드 사진 (events.csv와 같은 폴더). 없으면 직접 그린 로봇개 그림
+ROBOT_SENSORS = ("LiDAR", "깊이 카메라", "발 접촉")  # config.yaml robot.sensors 기본값
 HISTORY_DIR = "history"      # 지난 점검: <events.csv 폴더>/history/<YYYY-MM-DD>/events.csv, trajectory.csv
 ROUTE_TICK_M = 100           # 점검 이력 지도: 경로를 따라 이 간격마다 누적 거리 눈금
 KST = timezone(timedelta(hours=9))
@@ -93,12 +117,21 @@ def trace_payload(trace: dict | None) -> dict | None:
             "t_settle": r["t_settle_step"]}
 
 
+def _battery(v) -> int | None:
+    """config robot.battery (0~100 %). 비었거나 숫자가 아니면 None (로봇 카드의 배터리 줄을 숨긴다)."""
+    try:
+        return max(0, min(100, round(float(v))))
+    except (TypeError, ValueError):
+        return None
+
+
 def build_payload(events: list[dict], traj: list[dict], thresholds: dict | None = None,
                   photos: dict | None = None, meta: dict | None = None, traces: dict | None = None,
                   report_href: str | None = None, history: list[tuple[list[dict], list[dict]]] | None = None,
                   stepped_blocks: int | None = None, blocks: dict | None = None) -> dict:
     """photos: prepare_photos 결과 {id: {src, w, h, mark, overlay}}. 사진이 없는 지점은 photo=None.
-    meta: 세션 정보 {"area": 구간, "robot": 로봇} (config.yaml의 report.area, robot.name).
+    meta: 세션 정보 {"area": 구간, "robot": 로봇 이름, "model": 모델, "sensors": [센서], "robot_photo": 사진 상대 경로}
+          (config.yaml의 report.area, robot.name·model·sensors. robot_photo는 write_dashboard가 채운다).
     report_href: 점검 이력의 "신고서 열기" 주소 (없으면 버튼을 숨긴다).
     각 지점의 csv: events.csv에 쓰는 것과 같은 형식의 칸 문자열 (점검 이력 CSV 다운로드가 그대로 이어 붙인다).
     history: 지난 점검 [(events, trajectory)] (점검 이력 페이지만 쓴다). 가장 최근 날짜와 같은 날은 건너뛴다.
@@ -117,12 +150,19 @@ def build_payload(events: list[dict], traj: list[dict], thresholds: dict | None 
         "t1": traj[-1]["t"] if traj else None,
         "area": (meta or {}).get("area") or "",
         "robot": (meta or {}).get("robot") or "",
+        # 로봇 카드: 모델(config robot.model, 없으면 이름), 센서(robot.sensors), 사진(<HTML 폴더>/photos/robot.png 사본)
+        "robot_model": (meta or {}).get("model") or (meta or {}).get("robot") or "",
+        "robot_sensors": list((meta or {}).get("sensors") or ROBOT_SENSORS),
+        "robot_photo": (meta or {}).get("robot_photo"),
+        "robot_battery": _battery((meta or {}).get("battery")),  # config robot.battery (%), 없으면 None → 줄 숨김
+        "meters": display_meters(path_length(traj)),  # 로봇 카드 이동 거리 (신고서와 같은 반올림)
         "distance_m": path_length(traj),  # 1m 미만 흔들림은 거른다. 반올림은 화면에서 한 번만
         "thresholds": {k: list(v) for k, v in th.items()},
         "trajectory": [[round(p["lat"], 7), round(p["lon"], 7)] for p in traj],
         "trajectory_xy": [[round(p["x"], 2), round(p["y"], 2)] for p in traj],
         "report": report_href,
         "stepped_blocks": stepped_blocks,
+        "home": home_cards(events, th),
         "blocks": blocks,
         "csv_columns": EVENT_COLUMNS,
         "events": [event_payload(e, events, th, photos, traces) for e in events],
@@ -220,6 +260,18 @@ def _fit_affine(pts: list[dict], key: str) -> list[float]:
     return [c[0] - c[1] * mx - c[2] * my, c[1], c[2]]
 
 
+def home_cards(events: list[dict], th: dict) -> dict:
+    """종합 현황 손상 정보 카드.
+    order: 위험→주의, 같은 판정은 exceed_ratio 큰 순(같으면 이른 시각). 카드의 "다음" 두 줄은 이 순서로 지금 지점 다음.
+    default: 로봇이 가장 최근에 찾은 위험 지점 (위험이 없으면 주의, 둘 다 없으면 None). 아무것도 고르지 않았을 때 카드 내용."""
+    rank = {"danger": 2, "warn": 1}
+    issues = sorted((e for e in events if e["level"] in rank),
+                    key=lambda e: (-rank[e["level"]], -exceed_ratio(e["kind"], e["level"], e["value"], th), e["t"]))
+    default = next((max(c, key=lambda e: e["t"])["id"] for lv in ("danger", "warn")
+                    if (c := [e for e in events if e["level"] == lv])), None)
+    return {"order": [e["id"] for e in issues], "default": default}
+
+
 def run_date(events: list[dict], traj: list[dict]) -> str | None:
     """점검 날짜 (KST, YYYY-MM-DD): 궤적 첫 시각, 궤적이 없으면 가장 이른 지점 시각."""
     ts = [traj[0]["t"]] if traj else [e["t"] for e in events]
@@ -281,6 +333,15 @@ def build_html(events: list[dict], traj: list[dict], thresholds: dict | None = N
             .replace("__LEAFLET_JS__", LEAFLET_JS)
             .replace("__LEAFLET_JS_SRI__", LEAFLET_JS_SRI)
             .replace("__INTER_CSS__", INTER_CSS)
+            .replace("__MAPLIBRE_JS_SRI__", MAPLIBRE_JS_SRI)
+            .replace("__MAPLIBRE_JS__", MAPLIBRE_JS)
+            .replace("__MAPLIBRE_CSS_SRI__", MAPLIBRE_CSS_SRI)
+            .replace("__MAPLIBRE_CSS__", MAPLIBRE_CSS)
+            .replace("__MAPLIBRE_LEAFLET_JS_SRI__", MAPLIBRE_LEAFLET_JS_SRI)
+            .replace("__MAPLIBRE_LEAFLET_JS__", MAPLIBRE_LEAFLET_JS)
+            .replace("__VECTOR_STYLE__", VECTOR_STYLE_URL)
+            .replace("__VECTOR_ATTRIBUTION__", VECTOR_ATTRIBUTION)
+            .replace("__MAP_COLORS__", json.dumps(VECTOR_PALETTE))
             .replace("__TILE_FALLBACK_URL__", TILE_FALLBACK_URL)
             .replace("__TILE_FALLBACK_SUBDOMAINS__", TILE_FALLBACK_SUBDOMAINS)
             .replace("__TILE_FALLBACK_MAX_NATIVE_ZOOM__", str(TILE_FALLBACK_MAX_NATIVE_ZOOM))
@@ -292,6 +353,31 @@ def build_html(events: list[dict], traj: list[dict], thresholds: dict | None = N
             .replace("__LEVEL_FILTER__", level_filter_html(events))
             .replace("__DATE_CHIPS__", date_chips_html(payload["dates"], events))
             .replace("__DATA__", data))
+
+
+def copy_robot_photo(src: Path, out_dir: Path, max_side: int = 640) -> str | None:
+    """로봇 사진을 현장 사진처럼 <HTML 폴더>/photos/robot.png로 복사한다 (긴 변 max_side 이하, 투명 배경 유지).
+    돌려주는 값: HTML 기준 상대 경로. 사진이 없거나 읽을 수 없거나 투명한 곳이 없는(배경이 있는) 그림이면 None
+    (화면은 직접 그린 그림으로 대체, 지난번 사본은 지운다)."""
+    from PIL import Image, UnidentifiedImageError
+
+    from .photos import PHOTO_DIR
+    dst = out_dir / PHOTO_DIR / ROBOT_PHOTO
+    if not src.is_file():
+        return None
+    try:
+        with Image.open(src) as im:
+            im = im.convert("RGBA")
+            if im.getchannel("A").getextrema()[0] == 255:  # 투명 배경이 아니다 (카드 캡처 등)
+                dst.unlink(missing_ok=True)
+                return None
+            im = im.crop(im.getchannel("A").getbbox())  # 투명 여백을 잘라 로봇이 칸을 채우게
+            im.thumbnail((max_side, max_side))
+            (out_dir / PHOTO_DIR).mkdir(parents=True, exist_ok=True)
+            im.save(dst, "PNG", optimize=True)
+    except (OSError, UnidentifiedImageError):
+        return None
+    return f"{PHOTO_DIR}/{ROBOT_PHOTO}"
 
 
 def write_dashboard(events_path: str | Path, traj_path: str | Path, out_path: str | Path,
@@ -312,6 +398,7 @@ def write_dashboard(events_path: str | Path, traj_path: str | Path, out_path: st
     trace_rows = read_foot_traces(traces_path) if traces_path.is_file() else []
     traces = group_foot_traces(trace_rows)
     report_href = REPORT_NAME if (out.parent / REPORT_NAME).is_file() else None
+    meta = {**(meta or {}), "robot_photo": copy_robot_photo(Path(events_path).parent / ROBOT_PHOTO, out.parent)}
     history = read_history(history_dir if history_dir else Path(events_path).parent / HISTORY_DIR)
     blocks_path = Path(blocks_path) if blocks_path else Path(events_path).parent / "blocks.csv"
     blocks = read_blocks(blocks_path) if blocks_path.is_file() else None
@@ -328,11 +415,8 @@ _TEMPLATE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__</title>
-<script>
-  // 라이트 테마 기본, 사용자가 고른 테마는 브라우저에 기억 (저장소를 못 쓰면 라이트)
-  try { if (localStorage.getItem("stepmap-theme") === "dark") document.documentElement.dataset.theme = "dark"; } catch (e) {}
-</script>
 <link rel="stylesheet" href="__LEAFLET_CSS__" integrity="__LEAFLET_CSS_SRI__" crossorigin="">
+<link rel="stylesheet" href="__MAPLIBRE_CSS__" integrity="__MAPLIBRE_CSS_SRI__" crossorigin="anonymous">
 <link rel="stylesheet" href="__FONT_CSS__" integrity="__FONT_CSS_SRI__" crossorigin="anonymous" media="print" onload="this.media='all'">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -402,14 +486,15 @@ _TEMPLATE = r"""<!doctype html>
              overflow: hidden; text-overflow: ellipsis; }
   .tb-date b { color: var(--text); font-weight: 600; }
   /* 아이콘 버튼: 36px 흰 원 */
-  .icon-btn, .h-cal-btn, .dp-close { display: grid; place-items: center; flex: none; width: 36px; height: 36px; padding: 0; border: 0;
+  .icon-btn, .h-cal-btn { display: grid; place-items: center; flex: none; width: 36px; height: 36px; padding: 0; border: 0;
                                      border-radius: 50%; background: var(--surface); color: var(--text); box-shadow: var(--shadow); cursor: pointer; }
-  .icon-btn:hover, .h-cal-btn:hover, .dp-close:hover { background: var(--surface-2); }
+  .icon-btn:hover, .h-cal-btn:hover { background: var(--surface-2); }
   .icon-btn svg { width: 18px; height: 18px; }
   .main { min-width: 0; padding: 0 28px 48px; }
   /* 1259px 이하: 메뉴는 화면 아래 고정 탭바 */
   @media (max-width: 1259px) {
-    .topbar { grid-template-columns: minmax(0, 1fr) auto; }
+    /* 흐림(backdrop-filter)이 있으면 그 안의 fixed 요소가 위쪽 바 기준으로 놓이므로 끈다 (탭바를 화면 아래에 고정) */
+    .topbar { grid-template-columns: minmax(0, 1fr) auto; background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
     .nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 950; justify-content: space-around; gap: 2px; border-radius: 18px 18px 0 0;
            padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); box-shadow: 0 -1px 2px rgb(54 50 54 / 0.06), 0 -8px 24px rgb(54 50 54 / 0.08); }
     .nav a { flex: 1 1 0; flex-direction: column; justify-content: center; gap: 3px; padding: 8px 4px; font-size: 12px; }
@@ -453,32 +538,31 @@ _TEMPLATE = r"""<!doctype html>
   .kpi .sub > span { display: inline-flex; align-items: center; gap: 3px; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .kpi .sub .lv { padding: 0 6px 0 5px; font-size: var(--fs-xs); line-height: 1.4; }
 
-  /* ---------- 종합 현황: 지도 + 위험·주의 목록 ---------- */
-  .home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; }
-  .mapcard { display: grid; gap: 12px; min-width: 0; }
+  /* ---------- 지도 색 (종합 현황·점검 이력·검사 결과 위치 지도 공통) ---------- */
+  .mapcard { min-width: 0; }
   /* 지도 배경은 페이지 테마와 따로 고른다 (밝은 지도 기본). 경로·마커·조작 버튼 색도 지도 배경에 맞춘다 */
   /* 밟은 지도(기본): CARTO light_all 그대로 (못 받아 OpenTopoMap이면 회색 필터). 평면 지도: #ECECEC 바탕, 흰 길(격자)
      마커: 등급 색 + 흰 테두리 2px + 옅은 그림자. 묶음: 흰 원 + 차콜 숫자 + 가장 높은 등급 색 테두리 */
   .mapcard[data-map="light"] {
-    --map-bg: #ECECEC; --tile-filter: none; --tile-opacity: 1;
-    --map-grid: #FFFFFF; --map-park: #CDEBDD; --map-text: #363236; --map-leader: #363236;
+    --map-bg: #EDEDED; --tile-filter: none; --tile-opacity: 1; --link: #363236;
+    --map-grid: #FFFFFF; --map-park: #BFEBD6; --map-text: #363236; --map-leader: #363236;
     --m-danger: #EF6461; --m-warn: #F7B558; --m-ok: #A5D48C; --m-ink: #363236; --m-ring: #FFFFFF; --m-focus: #363236;
     --m-shadow: drop-shadow(0 1px 1.5px rgb(54 50 54 / 0.35));
     --ctl-bg: #FFFFFF; --ctl-hover: #F9F8FA; --ctl-text: #363236; --ctl-muted: #75707A; --ctl-border: #E4E2E6; --ctl-link: #363236;
     --ctl-on: #363236; --ctl-on-text: #FFFFFF; --ctl-shadow: 0 1px 2px rgb(54 50 54 / 0.1), 0 4px 12px rgb(54 50 54 / 0.1);
   }
   :root[data-tiles="topo"] .mapcard[data-map="light"] { --tile-filter: grayscale(1) contrast(0.85) brightness(1.05); --tile-opacity: 0.55; }
+  :root[data-tiles="vector"] .mapcard[data-map] { --tile-filter: none; --tile-opacity: 1; }  /* 벡터 지도는 어두운 지도도 스타일 색으로 */
   .mapcard[data-map="dark"] {
     --map-bg: #1F1C1F; --tile-filter: grayscale(1) invert(1) brightness(0.85) contrast(0.9);
     --tile-opacity: 1;
-    --map-grid: #2E2A2E; --map-park: #2C3A33; --map-text: #F2F0F2; --map-leader: #F2F0F2;
+    --map-grid: #3A363A; --map-park: #2C3B33; --map-text: #F2F0F2; --map-leader: #F2F0F2; --link: #F2F0F2;
     --m-danger: #EF6461; --m-warn: #F7B558; --m-ok: #A5D48C; --m-ink: #363236; --m-ring: #1F1C1F; --m-focus: #F2F0F2;
     --m-shadow: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.5));
     --ctl-bg: #2A262A; --ctl-hover: #332E33; --ctl-text: #F2F0F2; --ctl-muted: #ADA7B0; --ctl-border: #3D383D; --ctl-link: #F2F0F2;
     --ctl-on: #F2F0F2; --ctl-on-text: #1F1C1F; --ctl-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 12px rgb(0 0 0 / 0.3);
   }
-  .mapbox { position: relative; isolation: isolate; height: clamp(440px, calc(100vh - 400px), 760px); border: 0;
-            border-radius: var(--radius); overflow: hidden; background: var(--map-bg); box-shadow: var(--shadow); }
+  .mapbox { position: relative; isolation: isolate; overflow: hidden; background: var(--map-bg); }
   #map, #plane { position: absolute; inset: 0; }
   :is(#map, #h-map, #d-map).leaflet-container { background: var(--map-bg); font: var(--fs-small) var(--font); }
   :is(#map, #h-map, #d-map) .leaflet-tile-pane { filter: var(--tile-filter); opacity: var(--tile-opacity); }
@@ -489,13 +573,12 @@ _TEMPLATE = r"""<!doctype html>
   :is(#map, #h-map, #d-map) .leaflet-control-attribution { padding: 2px 8px; border-radius: 10px 0 0 0; color: var(--ctl-muted);
                                       background: color-mix(in srgb, var(--ctl-bg) 90%, transparent); }
   :is(#map, #h-map, #d-map) .leaflet-control-attribution a { color: var(--ctl-link); }
+  /* 종합 현황 저작자 표시: 지도 밖 #map-attr로 옮겨 블록 줄보다 위 레이어에 한 줄로 (11px, 반투명 흰 배경) */
+  .map-attr .leaflet-control-attribution { float: none; display: block; max-width: 100%; margin: 0; padding: 1px 6px; border-radius: 6px; background: rgb(255 255 255 / 0.86); color: #55505A;
+                                           font-size: 11px; line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .map-attr .leaflet-control-attribution a { color: #363236; text-decoration: none; }
+  .map-attr .leaflet-control-attribution a:hover { text-decoration: underline; }
   .map-tools { position: absolute; top: 12px; right: 12px; z-index: 600; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-  .map-seg { display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px; border: 1px solid var(--ctl-border);
-             background: var(--ctl-bg); box-shadow: var(--ctl-shadow); }
-  .map-seg button { padding: 5px 10px; border: 0; border-radius: 7px; background: none; color: var(--ctl-text);
-                    font-size: var(--fs-small); font-weight: 600; cursor: pointer; }
-  .map-seg button:hover { background: var(--ctl-hover); }
-  .map-seg button[aria-pressed="true"] { background: var(--ctl-on); color: var(--ctl-on-text); }
   #plane svg { display: block; width: 100%; height: 100%; }
   .ev-marker, .ev-cluster { background: none; border: none; }
   .ev-marker svg, .ev-cluster svg { display: block; overflow: visible; filter: var(--m-shadow, none); }
@@ -507,10 +590,7 @@ _TEMPLATE = r"""<!doctype html>
   .retry { padding: 6px 12px; font-size: var(--fs-small); font-weight: 600; border-radius: 10px;
            border: 1px solid var(--ctl-border); background: var(--ctl-bg); color: var(--ctl-text); cursor: pointer; box-shadow: var(--ctl-shadow); }
   .retry:hover { background: var(--ctl-hover); }
-  .legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 16px; color: var(--muted);
-            font-size: var(--fs-small); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
   .legend .item { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
-  .legend .sep { width: 1px; height: 18px; background: var(--border); }
   /* 모양 범례: 회색 (판정 색 필터 버튼과 헷갈리지 않게 색을 쓰지 않는다) */
   .shape-legend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
   .shape-legend .shp { width: 14px; height: 14px; flex: none; fill: var(--muted); }
@@ -531,28 +611,6 @@ _TEMPLATE = r"""<!doctype html>
                border: 1px solid var(--ctl-border); border-radius: 12px; background: var(--ctl-bg); color: var(--ctl-text);
                font-weight: 600; box-shadow: var(--ctl-shadow); pointer-events: none; white-space: nowrap; }
   .map-empty[hidden] { display: none; }
-  /* 지도 옆 상세 패널: 마커를 누른 지점의 사진·측정값·근거. 길면 패널 안에서만 스크롤 */
-  .dpanel { position: relative; display: flex; flex-direction: column; min-width: 0; padding: 18px 18px 20px; overflow: auto;
-            background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); }
-  .dp-empty { margin: auto; padding: 32px 12px; color: var(--muted); text-align: center; word-break: keep-all; }
-  .dp-empty .ico { display: block; width: 28px; height: 28px; margin: 0 auto 10px; }
-  .dp-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding-right: 40px; margin-bottom: 14px; }
-  .dp-head .kind { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-h2); font-weight: 600; }
-  .dp-head .id { color: var(--muted); font-size: var(--fs-small); font-variant-numeric: tabular-nums; }
-  .dp-close { position: absolute; top: 12px; right: 12px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0;
-              border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--text); cursor: pointer; }
-  .dp-close:hover { border-color: var(--border-hi); }
-  .dp-close svg { width: 16px; height: 16px; }
-  .dpanel .ph { --maxh: 260px; }
-  .dpanel .ph-btn { margin-bottom: 4px; }
-  .dpanel .no-photo { height: 140px; margin: 0 0 4px; }
-  .dpanel .v-big { margin-top: 12px; }
-  .dpanel .v-big .num { font-size: 44px; }
-  .dpanel .v-crit { margin: 8px 0 14px; word-break: keep-all; }
-  .dpanel .v-basis { margin-top: 0; padding-top: 14px; }
-  .dpanel .v-basis dl { gap: 6px 14px; font-size: var(--fs-small); }
-  .dp-actions { margin-top: 16px; }
-  .dp-actions .btn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
 
   /* ---------- 검사 결과 (노면 형상 + 흔들림): 요약 한 줄 + 왼쪽 목록(360px) + 오른쪽 상세 ---------- */
   .d-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 16px 0; padding: 12px 16px;
@@ -831,36 +889,200 @@ _TEMPLATE = r"""<!doctype html>
   .dlg-cap-main { color: var(--text); font-weight: 600; }
 
   /* ---------- 카드: 모서리 18px, 테두리 없이 옅은 그림자 ---------- */
-  .kpi, .legend, .dpanel, .v-detail, .d-loc, .h-card, .d-summary { border: 0; border-radius: var(--radius); background: var(--surface);
+  .kpi, .v-detail, .d-loc, .h-card, .d-summary { border: 0; border-radius: var(--radius); background: var(--surface);
                                                                      box-shadow: var(--shadow); }
   .h-mapbox, .d-mapbox { border: 0; border-radius: 14px; }
   /* ---------- 버튼·칩: 완전 둥근 모양(pill) ---------- */
-  .btn, .lv-btn, .h-chip, .retry, .h-route-btn, .h-reset, .h-more, .map-seg, .map-seg button, .tabs, .tabs button,
+  .btn, .lv-btn, .h-chip, .retry, .h-route-btn, .h-reset, .h-more, .tabs, .tabs button,
   .h-f select, .cf, .rep, .ph-btn { border-radius: 999px; }
   .ph-btn { border-radius: 12px; }
   .btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-  .map-seg { padding: 4px; }
-  .map-seg button { padding: 6px 12px; }
   .tabs { padding: 4px; border: 0; box-shadow: var(--shadow); }
   .lv-btn, .h-chip { background: var(--surface); }
-  .h-cal-btn, .dp-close { width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--surface);
+  .h-cal-btn { width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--surface);
                          color: var(--text); box-shadow: var(--shadow); }
 
-  /* 1259px 이하: 상세 패널은 지도 아래 */
-  @media (max-width: 1259px) {
-    .home-grid { grid-template-columns: minmax(0, 1fr); }
+  /* ---------- 유리(젤리) 카드: 떠 있는 카드·메뉴·버튼 공통 ----------
+     흰 유리 0.78 / 다크 유리 0.86. 지도에서 가장 어두운 곳(검정) / 가장 밝은 곳(흰색) 위에서도 글자 대비 4.5 이상,
+     유리 위 보조 글자는 --glass-muted (라이트 #55505A 4.63:1, 다크 #C2BCC5 5.88:1). 등급 색 글자는 불투명 배지 안에만.
+     종합 현황은 지도 밝기 = 테마 (밝은 지도 → 흰 유리, 어두운 지도 → 다크 유리) */
+  :root { --glass-bg: rgb(255 255 255 / 0.78); --glass-border: rgb(255 255 255 / 0.8); --glass-hi: inset 0 1px 0 rgb(255 255 255 / 0.9);
+          --glass-shadow: 0 8px 32px rgb(54 50 54 / 0.12); --glass-muted: #55505A; --glass-solid: #FFFFFF; --frame-bg: rgb(54 50 54 / 0.06);
+          --gauge-track: rgb(54 50 54 / 0.12); }
+  :root[data-theme="dark"] { --glass-bg: rgb(31 28 31 / 0.86); --glass-border: rgb(255 255 255 / 0.08); --glass-hi: inset 0 1px 0 rgb(255 255 255 / 0.06);
+          --glass-shadow: 0 8px 32px rgb(0 0 0 / 0.36); --glass-muted: #C2BCC5; --glass-solid: #2A262A; --frame-bg: rgb(255 255 255 / 0.06);
+          --gauge-track: rgb(255 255 255 / 0.16); }
+  .glass, .nav, .icon-btn, #page-home .retry {
+    background: var(--glass-bg); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4);
+    border: 1px solid var(--glass-border); box-shadow: var(--glass-hi), var(--glass-shadow); }
+  .glass { border-radius: 18px; color: var(--text); }
+  .frame { padding: 6px; border-radius: 22px; background: var(--frame-bg); }  /* 카드 묶음을 감싸는 반투명 회색 틀 */
+  /* 흐림을 못 쓰거나 투명도를 줄이도록 설정한 환경: 불투명 */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass, .nav, .icon-btn, #page-home .retry { background: var(--glass-solid); }
   }
-  /* 1260px 이상: 종합 현황을 화면 높이에 맞춘다. 지도는 남은 높이, 오른쪽 상세 패널(380px)은 지도+범례 높이(패널 안에서만 스크롤) */
-  @media (min-width: 1260px) and (min-height: 700px) {
-    .main:has(> #page-home:not([hidden])) { padding-bottom: 0; }
-    #page-home:not([hidden]) { display: flex; flex-direction: column; height: calc(100vh - var(--topbar-h)); height: calc(100dvh - var(--topbar-h));
-                               padding-bottom: 20px; }
-    #page-home .home-grid { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr) auto; row-gap: 12px; }
-    #page-home .mapcard { display: contents; }  /* 지도·범례를 격자에 바로 놓는다 (지도 색 변수는 그대로 물려받음) */
-    #page-home .mapbox { grid-column: 1; grid-row: 1; height: auto; min-height: 0; }
-    #page-home .legend { grid-column: 1; grid-row: 2; }
-    #page-home .dpanel { grid-column: 2; grid-row: 1 / 3; min-height: 0; }
+  @media (prefers-reduced-transparency: reduce) {
+    .glass, .nav, .icon-btn, #page-home .retry { background: var(--glass-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  }
+  .app:has(#page-home:not([hidden])) .tb-date { display: none; }
+
+  /* ---------- 종합 현황: 화면 전체 지도 + 유리 카드 ---------- */
+  #page-home { --card-w: 360px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .hfilter { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; color: var(--glass-muted); font-size: var(--fs-small); }
+  .hfilter .lv-filter { display: flex; }
+  .hfilter .lv-btn:not([aria-pressed="true"]) { background: var(--glass-solid); color: var(--glass-muted); }
+  .hfilter .shape-legend .item { color: var(--text); }
+  .hfilter .shape-legend .shp { fill: var(--glass-muted); }
+  /* ---------- 아래 블록 줄: 반투명 회색 틀 안에 로봇 카드 + (지점을 누르면) 사진·측정값/기준 대비·근거 블록 ---------- */
+  #page-home { --rc-w: clamp(440px, 34vw, 520px); }
+  .hrow { display: flex; gap: 8px; padding: 8px; border-radius: 22px; background: rgb(54 50 54 / 0.08); }
+  :root[data-theme="dark"] .hrow { background: rgb(255 255 255 / 0.08); }
+  .hrow .glass { min-width: 0; }
+  .chip-bg { background: rgb(54 50 54 / 0.07); }
+  :root[data-theme="dark"] .chip-bg { background: rgb(255 255 255 / 0.09); }
+  /* 로봇 카드 */
+  .hrobot { position: relative; display: flex; flex-direction: column; flex: 0 0 var(--rc-w); padding: 16px 18px; overflow: visible; }
+  .rc-top { position: relative; z-index: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .rc-name { min-width: 0; padding: 7px 16px; border-radius: 12px; background: #F7B558; color: #363236; font-size: 22px; font-weight: 600;
+             line-height: 1.25; letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rc-nav { display: flex; gap: 4px; margin-left: auto; padding: 4px; border-radius: 14px; }
+  .rc-nav button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%;
+                   background: var(--glass-solid); color: var(--text); box-shadow: 0 1px 3px rgb(54 50 54 / 0.14); cursor: pointer; }
+  .rc-nav button:hover { background: var(--accent); color: var(--on-accent); }
+  .rc-nav svg { width: 16px; height: 16px; }
+  .rc-dl { position: relative; z-index: 1; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 6px 10px;
+           max-width: 58%; margin: 16px 0 0; font-size: var(--fs-small); }
+  .rc-dl dt { color: var(--glass-muted); white-space: nowrap; }
+  .rc-dl dd { justify-self: start; max-width: 100%; margin: 0; padding: 2px 10px; border-radius: 999px; overflow: hidden; white-space: nowrap;
+              text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  .rc-dl dd.chip-bg { background: #EFEEF0; }  /* 불투명: 뒤의 로봇 사진이 비치지 않게 */
+  .rc-dl [hidden] { display: none; }
+  .rc-art { position: absolute; z-index: 0; right: -6px; bottom: -16px; width: 42%; height: 186px; pointer-events: none; }  /* 오른쪽 아래로 살짝 넘침 (옆 블록은 가리지 않게) */
+  .rc-art::after { content: ""; position: absolute; left: 14%; right: 6%; bottom: 6px; height: 16px; border-radius: 50%;
+                   background: radial-gradient(closest-side, rgb(54 50 54 / 0.26), rgb(54 50 54 / 0)); }  /* 발밑 옅은 타원 그림자 */
+  :root[data-theme="dark"] .rc-art::after { background: radial-gradient(closest-side, rgb(0 0 0 / 0.55), rgb(0 0 0 / 0)); }
+  .rc-art img, .rc-art svg { position: relative; z-index: 1; display: block; width: 100%; height: 100%; object-fit: contain; object-position: right bottom; }
+  .rc-art svg { color: var(--text); }
+  /* 사진: 카드 안쪽 높이의 약 92%, 오른쪽 아래(아래 10px)에 카드 안으로. 위쪽은 ← → 버튼 옆 높이까지 (버튼이 위 레이어,
+     버튼 뒤에는 로봇 몸통 뒤쪽). 폭·오른쪽 여백(16~44px)은 JS(fitRobotPhoto)가 칩 오른쪽 끝 + 12px 안에서 최대로 맞춘다 */
+  .rc-art.photo { right: 44px; bottom: 10px; width: 45%; height: calc((100% - 32px) * 0.92); opacity: 1; }
+  .rc-art.photo::after { left: auto; right: calc(var(--shot-w, 100%) * 0.15); bottom: -5px; width: calc(var(--shot-w, 100%) * 0.7); height: 10px;
+                         background: rgb(54 50 54 / 0.12); filter: blur(8px); }  /* 발밑 옅은 타원 그림자: 사진 폭의 70% */
+  .rc-art[hidden], .rc-art img[hidden], .rc-art svg[hidden] { display: none; }
+  :root[data-theme="dark"] .rc-art::before { content: ""; position: absolute; right: 6%; bottom: 8%; width: 76%; aspect-ratio: 1; border-radius: 50%;
+                                             background: radial-gradient(circle, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0) 70%); }  /* 다크: 옅은 받침 */
+  /* 지점 블록: [사진][측정값 / 기준 대비][근거] */
+  .hblocks { position: relative; flex: 1 1 auto; min-width: 0; display: grid; gap: 8px; overflow: hidden; overflow: clip; overflow-clip-margin: 12px;
+             grid-template-columns: minmax(170px, 1.5fr) minmax(170px, 1fr) minmax(210px, 1.25fr); grid-template-rows: repeat(2, minmax(0, 1fr));
+             grid-template-areas: "photo num why" "photo ratio why"; }
+  .hblocks[hidden] { display: none; }
+  .hblocks.in > .hb { animation: hb-up 0.25s ease-out both; }
+  @keyframes hb-up { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .hblocks.in > .hb { animation: none; } }
+  .hb { position: relative; display: flex; flex-direction: column; min-height: 0; padding: 12px 16px; }
+  .hb-photo { grid-area: photo; padding: 0; overflow: hidden; border-radius: 18px; }
+  .hb-num { grid-area: num; }
+  .hb-ratio { grid-area: ratio; }
+  .hb-why { grid-area: why; }
+  .hb-photo .ph-btn { position: relative; display: block; width: 100%; height: 100%; padding: 4px; border: 0; background: none; cursor: zoom-in; }
+  .hb-photo .hb-pic { position: relative; width: 100%; height: 100%; overflow: hidden; border-radius: 14px; }
+  .hb-photo .hb-pic img, .hb-photo .hb-pic svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .hb-photo .hb-pic img { object-fit: cover; }
+  .hb-photo .no-photo { height: calc(100% - 8px); margin: 4px; border-radius: 14px; }
+  .hb-mk { position: absolute; z-index: 1; padding: 2px 7px; border-radius: 999px; background: rgb(255 255 255 / 0.86); color: #363236;
+           font-size: 11px; font-weight: 600; line-height: 1.4; white-space: nowrap; pointer-events: none; transform: translate(-50%, 0); }
+  .hb-tag { position: absolute; top: 12px; left: 12px; z-index: 1; display: inline-flex; align-items: center; gap: 6px; max-width: calc(100% - 24px);
+            padding: 4px 10px 4px 4px; border-radius: 999px; background: var(--glass-solid); font-size: var(--fs-small); font-weight: 600;
+            white-space: nowrap; overflow: hidden; box-shadow: var(--glass-shadow); }
+  .hb-tag .id { color: var(--glass-muted); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .hb-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .hb-head .t { font-size: var(--fs-small); font-weight: 600; }
+  .hb-head .s { color: var(--glass-muted); font-size: var(--fs-xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .hb-body { flex: 1; display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; min-height: 0; }
+  .hb-big { font-size: 38px; font-weight: 500; line-height: 1; letter-spacing: -0.02em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .hb-big small { margin-left: 3px; color: var(--glass-muted); font-size: 15px; font-weight: 500; letter-spacing: 0; }
+  .hb-big.txt { font-size: 24px; }
+  .hb-gauge { display: block; flex: 0 1 112px; min-width: 76px; max-height: 100%; overflow: visible; }
+  .hb-why { gap: 8px; padding-right: 92px; font-size: var(--fs-small); }
+  .hb-why .crit { margin: 0; font-weight: 600; word-break: keep-all; }
+  .hb-why .meta { margin: 0; color: var(--glass-muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+  .hb-why .sink { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .hb-cf { padding: 2px 9px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: var(--fs-xs); font-weight: 600; }
+  .hb-methods { display: flex; gap: 14px; margin-top: auto; }
+  .hb-methods .m { display: inline-flex; flex-direction: column; align-items: center; gap: 3px; color: var(--glass-muted); font-size: 11px; }
+  .hb-methods .m svg { width: 22px; height: 22px; opacity: 0.35; }
+  .hb-methods .m.on { color: var(--text); font-weight: 600; }
+  .hb-methods .m.on svg { opacity: 1; }
+  .hb-acts { position: absolute; top: 10px; right: 10px; display: flex; align-items: center; gap: 6px; }
+  .hb-go { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: var(--on-accent); }
+  .hb-go svg { width: 16px; height: 16px; }
+  .hb-close { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%;
+              background: rgb(54 50 54 / 0.07); color: var(--text); cursor: pointer; }
+  :root[data-theme="dark"] .hb-close { background: rgb(255 255 255 / 0.09); }
+  .hb-close:hover { background: var(--accent); color: var(--on-accent); }
+  .hb-close svg { width: 13px; height: 13px; }
+  /* 로봇개 마커: 차콜 원 + 흰 사족보행 실루엣, 옅은 차콜 고리가 천천히 퍼진다 */
+  .robot-mk { background: none; border: 0; cursor: pointer; }
+  .robot-mk:focus-visible { outline: 2px solid var(--m-focus); outline-offset: 3px; border-radius: 50%; }
+  #plane .robot { cursor: pointer; }
+  .robot-mk .pulse, .robot-mk .core { position: absolute; left: 0; top: 0; width: 36px; height: 36px; border-radius: 50%; }
+  .robot-mk .pulse { background: rgb(54 50 54 / 0.28); animation: robot-pulse 2.6s ease-out infinite; }
+  .robot-mk .core { display: grid; place-items: center; background: #363236; color: #FFFFFF;
+                    box-shadow: 0 0 0 2px #FFFFFF, 0 2px 8px rgb(54 50 54 / 0.35); }
+  .robot-mk svg { width: 24px; height: 24px; }
+  #plane .robot-pulse { transform-box: fill-box; transform-origin: center; animation: robot-pulse 2.6s ease-out infinite; }
+  @keyframes robot-pulse { from { transform: scale(1); opacity: 0.6; } to { transform: scale(2.6); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .robot-mk .pulse, #plane .robot-pulse { animation: none; opacity: 0.3; transform: scale(1.5); }
+  }
+  /* 1260px 이상: 지도를 화면 전체에 깔고 메뉴·카드가 모두 위에 뜬다 (페이지 스크롤 없음) */
+  @media (min-width: 1260px) {
+    body:has(#page-home:not([hidden])) { overflow: hidden; }
+    .app:has(#page-home:not([hidden])) .topbar { position: fixed; left: 0; right: 0; background: none;
+                                                 -webkit-backdrop-filter: none; backdrop-filter: none; pointer-events: none; }
+    .app:has(#page-home:not([hidden])) .topbar > * { pointer-events: auto; }
+    .app:has(#page-home:not([hidden])) .logo { padding: 5px 16px 5px 5px; border-radius: 999px; background: var(--glass-bg);
+      -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); border: 1px solid var(--glass-border);
+      box-shadow: var(--glass-hi), var(--glass-shadow); }
+    #page-home .mapbox { position: fixed; inset: 0; z-index: 0; }
+    #page-home .hfilter { position: fixed; top: calc(var(--topbar-h) + 4px); left: 28px; z-index: 700; max-width: 380px; }
+    #page-home .map-tools { position: fixed; top: calc(var(--topbar-h) + 4px); right: 28px; z-index: 700; }
+    /* 틀은 처음엔 로봇 카드 크기만, 지점을 고르면 오른쪽 끝(여백 24px)까지 0.25초에 늘어난다 */
+    #page-home .hrow { position: fixed; left: 24px; bottom: 24px; z-index: 700; height: 250px; width: calc(var(--rc-w) + 16px);
+                       max-width: calc(100vw - 48px); transition: width 0.25s ease-out; }
+    #page-home .hrow.open { width: calc(100vw - 48px); }
+    #page-home .leaflet-bottom { bottom: 286px; }  /* 확대 버튼은 블록 줄(250px + 아래 여백 24px) 바로 위 (열고 닫아도 높이 같음) */
+    #page-home .leaflet-right { right: 20px; }
+    .map-attr { position: fixed; right: 8px; bottom: 4px; z-index: 750; max-width: calc(100vw - 16px); }  /* 블록 줄 아래 여백(24px) 안 */
+  }
+  @media (min-width: 1260px) and (prefers-reduced-motion: reduce) { #page-home .hrow { transition: none; } }
+  /* 1259px 이하: 지도는 위 60%, 그 아래 로봇 카드 → 지점 블록 순서로 일반 카드 */
+  @media (max-width: 1259px) {
+    #page-home .hmapwrap { position: relative; height: 60vh; min-height: 320px; margin-top: 4px; overflow: hidden; border-radius: var(--radius);
+                           box-shadow: var(--shadow); }
+    #page-home .mapbox { position: absolute; inset: 0; }
+    #page-home .hfilter { position: absolute; top: 10px; left: 10px; z-index: 700; max-width: calc(100% - 20px); padding: 10px 12px; }
+    #page-home .map-tools { position: absolute; right: 10px; bottom: 34px; z-index: 700; }
+    #page-home .hrow { flex-direction: column; margin-top: 12px; }
+    #page-home .hrobot { flex: none; min-height: 230px; }
+    #page-home .hblocks { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: none; padding-top: 4px;
+                          grid-template-areas: "photo photo" "num ratio" "why why"; }
+    #page-home .hb-photo { height: 240px; }
+    #page-home .hb-num, #page-home .hb-ratio { min-height: 150px; }
+    #page-home .hb-why { min-height: 150px; }
+    #page-home .map-tools { max-width: calc(100% - 20px); }
+    .map-attr { position: absolute; right: 0; bottom: 0; z-index: 750; max-width: 100%; }
+    #page-home .leaflet-bottom { bottom: 16px; }  /* 확대 버튼은 저작자 표시 위 */
+  }
+  @media (max-width: 760px) {
+    .app:has(#page-home:not([hidden])) .logo > span:last-child { display: none; }
+    .rc-top { flex-wrap: wrap; }
+    .rc-name { font-size: 16px; }
+    .rc-dl { max-width: 100%; }
+    .rc-art { width: 34%; height: 110px; right: -6px; bottom: -10px; opacity: 0.35; }  /* 좁은 화면: 글자 뒤로 작게 */
+    #page-home .hblocks { grid-template-columns: minmax(0, 1fr); grid-template-areas: "photo" "num" "ratio" "why"; }
   }
   /* ---------- 모바일: 아래 탭바는 짧은 이름 ---------- */
   @media (max-width: 760px) {
@@ -881,9 +1103,7 @@ _TEMPLATE = r"""<!doctype html>
     .kpi .label small { display: none; }  /* 좁은 칸: 보조 라벨은 title(마우스 올림)로 */
     .kpi .value { font-size: 26px; }
     .kpi .sub { grid-column: 1 / 3; padding: 6px 0 0; }
-    .mapbox { height: 380px; }
     :is(#map, #h-map, #d-map) .leaflet-control-attribution { font-size: 10px; }
-    .legend { padding: 10px 12px; gap: 6px 12px; }
     .v-detail { padding: 16px; }
     .v-big .num { font-size: 44px; }
     .v-cards { gap: 6px; }
@@ -934,43 +1154,52 @@ _TEMPLATE = r"""<!doctype html>
     </nav>
     <div class="tb-right">
       <span class="tb-date" id="tb-date"></span>
-      <button type="button" class="icon-btn" id="theme-toggle" aria-label="다크 테마로 보기" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
     </div>
   </header>
 
   <main class="main" id="main">
     <section class="page" id="page-home" data-page="home" aria-labelledby="home-title">
-      <header class="page-head"><h1 id="home-title">종합 현황</h1><p class="sub" id="home-sub"></p></header>
-      <div class="kpis" aria-label="핵심 지표">
-        <div class="kpi"><span class="kpi-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 18.5c5 0 3.5-6.5 6-6.5s1-6.5 6-6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="6" cy="18.5" r="2" fill="currentColor"/><circle cx="18" cy="5.5" r="2" fill="currentColor"/></svg></span><div class="label">점검 거리</div><div class="value" id="k-dist"></div><div class="sub" id="k-dist-sub"></div></div>
-        <div class="kpi"><span class="kpi-ico warn" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.9"/></svg></span><div class="label">외관 이상 <small>카메라</small></div><div class="value" id="k-visual"></div><div class="sub" id="k-visual-sub"></div></div>
-        <div class="kpi"><span class="kpi-ico warn" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-dasharray="3 2.4"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></svg></span><div class="label">흔들림 의심 <small>발 접촉</small></div><div class="value" id="k-loose"></div><div class="sub" id="k-loose-sub"></div></div>
-        <div class="kpi"><span class="kpi-ico ok" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div class="label">정상 지점</div><div class="value" id="k-ok"></div><div class="sub" id="k-ok-sub"></div></div>
-      </div>
-      <div class="home-grid">
+      <h1 class="sr-only" id="home-title">종합 현황</h1>
+      <div class="hmapwrap">
         <div class="mapcard" id="mapcard" data-map="light">
           <div class="mapbox">
             <div id="map" role="application" aria-label="측정 지점 지도"></div>
             <div id="plane" role="group" aria-label="측정 지점 지도 (odom 좌표)" hidden></div>
             <div class="map-tools">
-              <div class="map-seg" role="group" aria-label="지도 배경">
-                <button type="button" data-map="light" aria-pressed="true">밝은 지도</button>
-                <button type="button" data-map="dark" aria-pressed="false">어두운 지도</button>
-              </div>
               <button type="button" class="retry" id="retry" hidden>지도 다시 불러오기</button>
             </div>
             <div class="map-empty" id="map-empty" role="status" hidden>표시할 지점이 없어요</div>
           </div>
-          <div class="legend" id="legend" aria-label="범례">
-            <div class="lv-filter" id="lv-filter" role="group" aria-label="판정별 지점 보기">__LEVEL_FILTER__</div>
-            <span class="sep" aria-hidden="true"></span>
-            <div class="shape-legend" id="shape-legend" role="group" aria-label="마커 모양">
-              <span class="item"><svg class="shp" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6"/></svg>노면 형상</span>
-              <span class="item"><svg class="shp" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.3" y="3.3" width="9.4" height="9.4" rx="1.8" transform="rotate(45 8 8)"/></svg>흔들림</span>
-            </div>
+        </div>
+        <div class="map-attr" id="map-attr"></div>
+        <div class="glass hfilter legend" id="legend" aria-label="범례">
+          <div class="lv-filter" id="lv-filter" role="group" aria-label="판정별 지점 보기">__LEVEL_FILTER__</div>
+          <span class="sep" aria-hidden="true"></span>
+          <div class="shape-legend" id="shape-legend" role="group" aria-label="마커 모양">
+            <span class="item"><svg class="shp" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6"/></svg>노면 형상</span>
+            <span class="item"><svg class="shp" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.3" y="3.3" width="9.4" height="9.4" rx="1.8" transform="rotate(45 8 8)"/></svg>흔들림</span>
           </div>
         </div>
-        <aside class="dpanel" id="dpanel" aria-label="지점 상세"></aside>
+      </div>
+      <div class="hrow" id="hrow" aria-label="점검 로봇과 지점 근거">
+        <section class="glass hrobot" aria-labelledby="rc-name">
+          <div class="rc-top">
+            <b class="rc-name" id="rc-name"></b>
+            <div class="rc-nav chip-bg" role="group" aria-label="지점 고르기">
+              <button type="button" id="rc-prev" aria-label="이전 지점 (위험→주의 순)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" style="fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round"/></svg></button>
+              <button type="button" id="rc-next" aria-label="다음 지점 (위험→주의 순)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" style="fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round"/></svg></button>
+            </div>
+          </div>
+          <dl class="rc-dl">
+            <dt>모델:</dt><dd class="chip-bg" id="rc-model"></dd>
+            <dt id="rc-battery-k">배터리:</dt><dd class="chip-bg" id="rc-battery"></dd>
+            <dt>센서:</dt><dd class="chip-bg" id="rc-sensors"></dd>
+            <dt>점검 일시:</dt><dd class="chip-bg" id="rc-when"></dd>
+            <dt>이동 거리:</dt><dd class="chip-bg" id="rc-dist"></dd>
+          </dl>
+          <div class="rc-art"><img id="rc-photo" alt="점검 로봇" hidden><svg id="rc-draw" viewBox="0 0 220 170" aria-hidden="true"><g style="fill:none;stroke:currentColor;stroke-width:11;stroke-linecap:round;stroke-linejoin:round"><path d="M62 96 46 122l10 30M84 96l-6 28 16 28M146 96l12 28-12 28M166 96l18 26-8 30"/></g><rect x="44" y="60" width="136" height="42" rx="20" style="fill:currentColor"/><path d="M168 66 196 46a7 7 0 0 1 9.6 2l6.4 10a7 7 0 0 1-2.6 9.8L186 80z" style="fill:currentColor"/><rect x="70" y="52" width="58" height="12" rx="6" style="fill:currentColor;opacity:0.7"/></svg></div>
+        </section>
+        <div class="hblocks" id="hblocks" aria-label="지점 근거" aria-live="polite" hidden></div>
       </div>
     </section>
 
@@ -1049,6 +1278,8 @@ _TEMPLATE = r"""<!doctype html>
 
 <script id="stepmap-data" type="application/json">__DATA__</script>
 <script src="__LEAFLET_JS__" integrity="__LEAFLET_JS_SRI__" crossorigin=""></script>
+<script src="__MAPLIBRE_JS__" integrity="__MAPLIBRE_JS_SRI__" crossorigin="anonymous"></script>
+<script src="__MAPLIBRE_LEAFLET_JS__" integrity="__MAPLIBRE_LEAFLET_JS_SRI__" crossorigin="anonymous"></script>
 <script>
 (function () {
   const DATA = JSON.parse(document.getElementById("stepmap-data").textContent);
@@ -1113,6 +1344,7 @@ _TEMPLATE = r"""<!doctype html>
     if (state.sel && state.sel.id === e.id) return;  // 같은 지점: 주소가 그대로라 hashchange가 오지 않는다
     state.pickedOnMap = true;
     location.replace(`#home/${e.id}`);
+    ensureVisible(e);
   };
 
   // ---------------------------------------------------------------- 작은 표시 요소
@@ -1145,10 +1377,26 @@ _TEMPLATE = r"""<!doctype html>
     diamond: (c) => `<rect class="mk-diamond" x="4.9" y="4.9" width="14.2" height="14.2" rx="2.6" transform="rotate(45 12 12)" ` +
                     `style="fill:${c};stroke:var(--m-ring);stroke-width:4;paint-order:stroke"/>` + PAW,
   };
+  // 누른 지점: 차콜 원 + 점선 고리 위에 원래 모양
   const homeMarkerInner = (e, sel) =>
-    (sel ? `<circle cx="12" cy="12" r="14.5" style="fill:var(--map-bg);stroke:#363236;stroke-width:5"/>` +
-           `<circle cx="12" cy="12" r="14.5" style="fill:none;stroke:#FFFFFF;stroke-width:3"/>` : "") +
+    (sel ? `<circle class="mk-sel" cx="12" cy="12" r="14" style="fill:#363236"/>` +
+           `<circle cx="12" cy="12" r="17.5" style="fill:none;stroke:var(--link, #363236);stroke-width:1.5;stroke-dasharray:3 2.6"/>` : "") +
     HOME_SHAPE[homeShape(e)](`var(--m-${e.level})`);
+  // 로봇개 아이콘 (단순한 사족보행 실루엣: 몸통 + 머리 + 다리 넷, currentColor)
+  const ROBOT_PATH = '<g style="fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round">' +
+                     '<path d="M7.2 14.2 5.8 17l1.2 2.6M9.6 14.2l-.5 2.8 1.5 2.6M14.6 14.2l1.1 2.8-1.2 2.6M16.9 14.2l1.5 2.8-.9 2.6"/></g>' +
+                     '<rect x="5.6" y="9.4" width="12.6" height="5.2" rx="2.2" style="fill:currentColor"/>' +
+                     '<path d="M17.4 10.3 20 8.6a.8.8 0 0 1 1.1.2l.8 1.3a.8.8 0 0 1-.3 1.1l-2.6 1.4z" style="fill:currentColor"/>';
+  // 로봇의 마지막 위치 = 이동 궤적 마지막 점 (위도·경도, odom x·y)
+  const ROBOT_LL = DATA.trajectory.length ? DATA.trajectory[DATA.trajectory.length - 1] : null;
+  const ROBOT_XY = DATA.trajectory_xy.length ? DATA.trajectory_xy[DATA.trajectory_xy.length - 1] : null;
+  const wideHome = matchMedia("(min-width: 1260px)");
+  // 지도 범위를 맞출 때 떠 있는 카드 자리를 비운다: 위(메뉴 + 필터 카드), 아래(블록 줄 높이 + 여백), 오른쪽(확대 버튼)
+  function homePadding() {
+    if (!wideHome.matches) return { tl: [28, 64], br: [28, 28] };
+    const top = document.querySelector(".topbar").offsetHeight + $("legend").offsetHeight + 24;
+    return { tl: [48, top], br: [72, $("hrow").offsetHeight + 24 + 32] };
+  }
   const homeMarkerSvg = (e, sel, lead = "") =>
     `<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">${lead}${homeMarkerInner(e, sel)}</svg>`;
   // 묶음: 흰 원 + 차콜 숫자(그 판정 기호 작게) + 가장 심한 판정 색 테두리. 흔들림이 하나라도 있으면 오른쪽 위에 작은 마름모 배지
@@ -1310,8 +1558,9 @@ _TEMPLATE = r"""<!doctype html>
       `<circle cx="${cx - g.dx}" cy="${cy - g.dy}" r="2.5" style="fill:var(--map-leader);stroke:var(--map-bg);stroke-width:1.5"/>`
     : "";
 
-  // ---------------------------------------------------------------- 배경 지도 타일: CARTO 밝은 회색 → OpenTopoMap + 회색 필터 → 평면 지도
+  // ---------------------------------------------------------------- 배경 지도: 벡터(OpenFreeMap) → 래스터(CARTO → OpenTopoMap + 회색 필터) → 평면 지도
   const TILES = [
+    { name: "vector", vector: true, url: "__VECTOR_STYLE__", attribution: '__VECTOR_ATTRIBUTION__' },
     { name: "carto", url: "__TILE_URL__", sub: "__TILE_SUBDOMAINS__", maxNative: __TILE_MAX_NATIVE_ZOOM__, attribution: '__TILE_ATTRIBUTION__' },
     { name: "topo", url: "__TILE_FALLBACK_URL__", sub: "__TILE_FALLBACK_SUBDOMAINS__", maxNative: __TILE_FALLBACK_MAX_NATIVE_ZOOM__,
       attribution: '__TILE_FALLBACK_ATTRIBUTION__' },
@@ -1324,6 +1573,58 @@ _TEMPLATE = r"""<!doctype html>
     root.dataset.tiles = t.name;  // OpenTopoMap이면 CSS가 회색 필터를 건다
     return L.tileLayer(t.url, { subdomains: t.sub, maxNativeZoom: t.maxNative, maxZoom, attribution: t.attribution });
   };
+  // 벡터 지도 색 (Python VECTOR_PALETTE): positron 스타일을 받아 층마다 색을 덮어쓴다
+  const MAP_COLORS = __MAP_COLORS__;
+  let baseStyle = null;
+  function vectorStyle(mode) {
+    if (!baseStyle) baseStyle = fetch(TILES[0].url).then((r) => { if (!r.ok) throw new Error(`http ${r.status}`); return r.json(); });
+    return baseStyle.then((st) => recolorStyle(st, MAP_COLORS[mode] || MAP_COLORS.light));
+  }
+  // 줌에 따라 바뀌는 값(interpolate·step)은 단계별 값에 곱한다 (["zoom"]은 맨 바깥 식에서만 쓸 수 있어 식째 곱할 수 없다)
+  function scaleZoomValue(v, f) {
+    if (typeof v === "number") return v * f;
+    if (!Array.isArray(v)) return v;
+    if (v[0] === "interpolate") return v.map((x, i) => (i >= 4 && i % 2 === 0 && typeof x === "number" ? x * f : x));
+    if (v[0] === "step") return v.map((x, i) => (i >= 2 && i % 2 === 0 && typeof x === "number" ? x * f : x));
+    return v;
+  }
+  function recolorStyle(src, c) {
+    const st = JSON.parse(JSON.stringify(src));
+    const NAME = ["coalesce", ["get", "name:ko"], ["get", "name"]];  // 한국어 이름 우선
+    const has = (id, ...words) => words.some((w) => id.includes(w));
+    // 도로 번호 방패, 골목·작은 도로 이름 숨김
+    st.layers = st.layers.filter((l) => !has(l.id, "shield") && l.id !== "highway-name-path" && l.id !== "highway-name-minor");
+    for (const l of st.layers) {
+      const pt = (l.paint = l.paint || {}), lay = (l.layout = l.layout || {}), id = l.id, sl = l["source-layer"];
+      if (l.type === "background") pt["background-color"] = c.land;
+      else if (id === "landuse_residential") { pt["fill-color"] = c.land; pt["fill-opacity"] = 1; }
+      else if (id === "park") { pt["fill-color"] = c.park; pt["fill-opacity"] = 1; }
+      else if (sl === "landcover" && has(id, "wood", "grass")) { pt["fill-color"] = c.wood; pt["fill-opacity"] = c.wood_opacity; }
+      else if (sl === "landcover") pt["fill-color"] = c.land;
+      else if (id === "water") { pt["fill-color"] = c.water; pt["fill-antialias"] = false; }  // 물가 선 없음
+      else if (id === "waterway") pt["line-color"] = c.water;
+      else if (id === "building") { pt["fill-color"] = c.building; pt["fill-outline-color"] = c.building; }
+      else if (l.type === "line" && (sl === "transportation" || sl === "aeroway")) {
+        pt["line-color"] = has(id, "casing", "railway") ? c.casing : c.road;  // 도로는 모든 등급 같은 색, 테두리·철도는 옅은 회색
+        if ("line-opacity" in pt) pt["line-opacity"] = 1;
+        if (has(id, "major", "motorway", "runway") && pt["line-width"] != null) pt["line-width"] = scaleZoomValue(pt["line-width"], 1.25);  // 큰 도로는 조금 더 굵게
+      }
+      else if (l.type === "fill" && (sl === "transportation" || sl === "aeroway")) pt["fill-color"] = c.road;
+      else if (l.type === "line" && sl === "boundary") pt["line-color"] = c.casing;
+      else if (l.type === "symbol") {
+        delete lay["icon-image"];  // 아이콘 숨김
+        if (lay["text-field"]) lay["text-field"] = NAME;
+        if (lay["text-size"] != null) lay["text-size"] = 11;  // 글자 작게 (11px)
+        if (id === "highway-name-major") l.minzoom = 15;      // 큰 도로 이름은 줌 15 이상
+        if (id === "label_other") l.minzoom = 14;              // 동 이름은 줌 14 이상
+        pt["text-color"] = c.label;
+        pt["text-halo-color"] = c.land;
+        pt["text-halo-width"] = 1;
+        delete pt["text-halo-blur"];
+      }
+    }
+    return st;
+  }
   // <img> 타일은 오류 상태(403 "Access blocked")나 대체 이미지("API KEY REQUIRED" 워터마크, 200 응답)를 그대로 그려
   // tileerror가 나지 않는다. 지도 중심과 그 옆 타일을 직접 받아 상태코드를 보고, 두 장의 내용이 똑같으면 대체 이미지로 본다.
   function checkTiles(map) {
@@ -1349,7 +1650,8 @@ _TEMPLATE = r"""<!doctype html>
   }
   // 지도 하나에 타일을 붙인다. 지금 제공처가 안 되면(확인 실패·한 장도 못 받고 실패 4번·10초 동안 0장) 다음 제공처,
   // 마지막 제공처도 안 되면 onPlane(이유). alive(): 그 지도가 아직 쓰이는지
-  function attachTiles(map, maxZoom, alive, onPlane) {
+  // modeOf(): 그 지도의 밝기 ("light" | "dark", 벡터 지도 색)
+  function attachTiles(map, maxZoom, alive, onPlane, modeOf = () => "light") {
     let layer = null, loaded = 0, failed = 0, timer = 0, attempt = 0;
     const next = (reason, at) => {
       if (at !== attempt || !alive()) return;
@@ -1359,7 +1661,26 @@ _TEMPLATE = r"""<!doctype html>
     const use = () => {
       const at = ++attempt;
       if (layer) layer.remove();
+      layer = null;
       loaded = failed = 0;
+      clearTimeout(timer);
+      if (TILES[state.tileIdx].vector) {
+        root.dataset.tiles = "vector";
+        // 라이브러리·스타일을 못 받거나, 타일 오류가 이어지거나, 12초 동안 타일이 하나도 안 오면 다음 제공처
+        if (!window.maplibregl || !L.maplibreGL) { next("vector-lib", at); return; }
+        timer = setTimeout(() => { if (!loaded) next("timeout", at); }, 12000);
+        vectorStyle(modeOf()).then((style) => {
+          if (at !== attempt || !alive()) return;
+          // 저작자 표시: 스타일 소스 문구 대신 "© OpenFreeMap © OpenMapTiles © OpenStreetMap contributors"
+          layer = L.maplibreGL({ style, attributionControl: { customAttribution: TILES[state.tileIdx].attribution },
+                                 localIdeographFontFamily: '"Pretendard Variable", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif' });
+          layer.addTo(map);
+          const ml = layer.getMaplibreMap();
+          ml.on("data", (ev) => { if (ev.dataType === "source" && ev.tile) { loaded++; if (map === state.map) state.tiles.loaded++; } });
+          ml.on("error", () => { failed++; if (map === state.map) state.tiles.failed++; if (!loaded && failed >= 4) next("vector-error", at); });
+        }).catch(() => next("style", at));
+        return;
+      }
       layer = tileLayer(maxZoom);
       layer.on("tileload", () => { loaded++; if (map === state.map) state.tiles.loaded++; });
       layer.on("tileerror", () => { failed++; if (map === state.map) state.tiles.failed++; if (!loaded && failed >= 4) next("tileerror", at); });
@@ -1368,34 +1689,47 @@ _TEMPLATE = r"""<!doctype html>
       timer = setTimeout(() => { if (!loaded) next("timeout", at); }, 10000);
     };
     use();
+    // 지도 밝기를 바꾸면 벡터 지도는 그 색의 스타일로 다시 칠한다
+    state.themeHooks.push(() => {
+      if (!alive() || !layer || !layer.getMaplibreMap || !TILES[state.tileIdx].vector) return;
+      vectorStyle(modeOf()).then((style) => { if (layer && layer.getMaplibreMap) layer.getMaplibreMap().setStyle(style); });
+    });
   }
 
   // ---------------------------------------------------------------- 종합 현황 지도 (Leaflet)
   let markerLayer = null;
   function startTiles() {
     const gen = ++state.gen;
-    const map = L.map("map", { zoomControl: true });
+    const map = L.map("map", { zoomControl: false });
+    L.control.zoom({ position: "bottomright" }).addTo(map);  // 왼쪽 위는 로고·필터 카드 자리
     state.map = map;
     state.mode = "tiles";
-    map.attributionControl.setPosition("bottomright");
+    $("map-attr").append(map.attributionControl.getContainer());  // 화면 가장 아래 오른쪽 구석 (지도를 지우면 같이 지워진다)
 
     // 이동 경로는 그리지 않는다. 지도 범위는 전체 측정 지점 기준으로 처음 한 번만 맞춘다
     // (판정 필터를 바꿔도 움직이지 않는다). 지점이 없을 때만 경로 범위를 쓴다
     const bounds = L.latLngBounds(DATA.events.length ? DATA.events.map((e) => [e.lat, e.lon]) : DATA.trajectory);
-    // 처음 열면 지점 전체 + 주변 동네가 보이게 여백을 둔다
-    map.fitBounds(bounds.pad(0.35));
-    // 데스크톱: 한 단계 더 확대해도 지점 전체가 들어가면 확대해 개별 마커가 보이게 한다
-    if (!narrow.matches) {
-      const fit = map.getBoundsZoom(bounds, false, L.point(40, 40));
-      if (fit > map.getZoom()) map.setZoom(map.getZoom() + 1, { animate: false });
+    if (ROBOT_LL) bounds.extend(ROBOT_LL);
+    // 떠 있는 카드에 마커가 가려지지 않게 카드 높이·폭만큼 여백을 두고 맞춘다
+    const pad = homePadding();
+    map.fitBounds(bounds, { paddingTopLeft: pad.tl, paddingBottomRight: pad.br, animate: false });
+    // 로봇개 마커: 로봇의 마지막 위치 (경로 선은 그리지 않는다)
+    if (ROBOT_LL) {
+      const robot = L.marker(ROBOT_LL, { icon: L.divIcon({ className: "robot-mk", iconSize: [36, 36], iconAnchor: [18, 18],
+                                             html: `<span class="pulse"></span><span class="core"><svg viewBox="0 0 24 24" aria-hidden="true">${ROBOT_PATH}</svg></span>` }),
+                           keyboard: true, zIndexOffset: 5000, title: "로봇 마지막 위치" }).addTo(map);
+      robot.on("click", openRobotCard);  // 로봇개를 누르면 가장 최근에 찾은 위험 지점(없으면 주의)
+      robot.getElement().setAttribute("role", "button");
+      robot.getElement().setAttribute("aria-label", "로봇 마지막 위치: 가장 최근에 찾은 위험 지점 보기");
     }
     map.on("zoomstart", () => { state.spider = null; });
-    map.on("click", () => { if (state.spider) { state.spider = null; renderMap(); } });  // 빈 곳을 누르면 접는다
+    // 빈 곳을 누르면 펼친 묶음을 접고, 지점 블록이 열려 있으면 닫는다
+    map.on("click", () => { if (state.spider) { state.spider = null; renderMap(); } else if (state.sel) closePanel(); });
     map.on("zoomend", renderMap);
     renderMap();
 
     // 타일: 지도 범위를 정한 뒤 붙인다 (제공처 확인이 지도 중심 타일을 받는다)
-    attachTiles(map, 19, () => gen === state.gen && state.mode === "tiles", (reason) => fallback(reason));
+    attachTiles(map, 19, () => gen === state.gen && state.mode === "tiles", (reason) => fallback(reason), () => $("mapcard").dataset.map);
   }
 
   function leafletMarkers() {
@@ -1479,7 +1813,7 @@ _TEMPLATE = r"""<!doctype html>
     state.mode = null;
     state.reason = null;
     state.tiles = { loaded: 0, failed: 0 };
-    state.tileIdx = 0;      // 다시 불러오기는 첫 제공처(CARTO)부터
+    state.tileIdx = 0;      // 다시 불러오기는 첫 제공처(벡터 지도)부터
     state.tileChecks = {};
     startTiles();
   });
@@ -1492,9 +1826,11 @@ _TEMPLATE = r"""<!doctype html>
     box.hidden = false;
     $("retry").hidden = false;
     if (planeDraw) { planeDraw(); return; }
+    // 빈 곳을 누르면 지점 블록을 닫는다 (마커·로봇개는 각자 처리)
+    box.addEventListener("click", (ev) => { if (!ev.target.closest(".ev, .robot") && state.sel) closePanel(); });
     const NS = "http://www.w3.org/2000/svg";
     // 범위: 전체 측정 지점 기준 (판정 필터와 무관). 지점이 없을 때만 경로 범위
-    const pts = DATA.events.length ? DATA.events.map((e) => [e.x, e.y]) : DATA.trajectory_xy;
+    const pts = (DATA.events.length ? DATA.events.map((e) => [e.x, e.y]) : DATA.trajectory_xy).concat(ROBOT_XY ? [ROBOT_XY] : []);
     const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
     const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
 
@@ -1506,11 +1842,12 @@ _TEMPLATE = r"""<!doctype html>
 
     function draw() {
       if (state.mode !== "plane") return;
-      // 위쪽은 지도 배경 전환·다시 불러오기 버튼 자리만큼 더 비운다
-      const W = box.clientWidth, H = box.clientHeight, pad = 48, padT = 72;
-      if (W <= 2 * pad || H <= pad + padT) return;  // 크기가 잡히기 전(레이아웃 전환 중)에는 건너뛴다
-      const s = Math.min((W - 2 * pad) / Math.max(maxX - minX, 1), (H - pad - padT) / Math.max(maxY - minY, 1));
-      const ox = (W - (maxX - minX) * s) / 2, oy = padT + (H - pad - padT - (maxY - minY) * s) / 2;
+      // 떠 있는 카드 자리(위·아래·왼쪽)를 비운다 (Leaflet 지도와 같은 여백)
+      const W = box.clientWidth, H = box.clientHeight, P = homePadding();
+      const [padL, padT] = P.tl, [padR, padB] = P.br;
+      if (W <= padL + padR + 40 || H <= padT + padB + 40) return;  // 크기가 잡히기 전(레이아웃 전환 중)에는 건너뛴다
+      const s = Math.min((W - padL - padR) / Math.max(maxX - minX, 1), (H - padT - padB) / Math.max(maxY - minY, 1));
+      const ox = padL + (W - padL - padR - (maxX - minX) * s) / 2, oy = padT + (H - padT - padB - (maxY - minY) * s) / 2;
       const X = (x) => ox + (x - minX) * s;            // x·y 같은 비율
       const Y = (y) => oy + (maxY - y) * s;            // y 위쪽
       const step = niceStep(60 / s);                    // 격자 간격: 화면에서 60px 이상
@@ -1524,9 +1861,10 @@ _TEMPLATE = r"""<!doctype html>
         g += `<line x1="0" y1="${Y(gy)}" x2="${W}" y2="${Y(gy)}"/>`;
 
       const barM = niceStep(120 / s), barPx = barM * s;
-      const bar = `<g transform="translate(16,${H - 24})" fill="${mapCss("--map-text")}" font-size="12">` +
-                  `<rect width="${barPx}" height="4" y="-4"/><text y="-10">${barM} m</text></g>` +
-                  `<text x="16" y="24" fill="${mapCss("--map-text")}" font-size="12">odom 좌표 · 격자 ${step} m</text>`;
+      // 축척·좌표 안내: 아래 카드 줄 위 오른쪽
+      const bx = W - padR - Math.max(barPx, 150), by = H - padB + 28;
+      const bar = `<g transform="translate(${bx.toFixed(1)},${by.toFixed(1)})" fill="${mapCss("--map-text")}" font-size="12">` +
+                  `<rect width="${barPx}" height="4" y="-4"/><text y="-10">${barM} m · odom 좌표 · 격자 ${step} m</text></g>`;
 
       box.innerHTML = `<svg xmlns="${NS}" width="${W}" height="${H}">` +
         `<g stroke="${mapCss("--map-grid")}" stroke-width="2">${g}</g>` + bar + `</svg>`;
@@ -1557,6 +1895,20 @@ _TEMPLATE = r"""<!doctype html>
         wire(node, tipContent(grp.members), activate, photoNote(grp.members));
         layer.append(node);
       }
+      if (ROBOT_XY) {  // 로봇개 마커 (Leaflet 지도와 같은 모양)
+        const rb = document.createElementNS(NS, "g");
+        rb.setAttribute("class", "robot");
+        rb.setAttribute("transform", `translate(${(X(ROBOT_XY[0]) - 18).toFixed(1)},${(Y(ROBOT_XY[1]) - 18).toFixed(1)})`);
+        rb.setAttribute("role", "button");
+        rb.setAttribute("tabindex", "0");
+        rb.setAttribute("aria-label", "로봇 마지막 위치: 가장 최근에 찾은 위험 지점 보기");
+        rb.addEventListener("click", openRobotCard);
+        rb.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openRobotCard(); } });
+        rb.innerHTML = `<circle class="robot-pulse" cx="18" cy="18" r="18" style="fill:rgb(54 50 54 / 0.28)"/>` +
+                       `<circle cx="18" cy="18" r="17" style="fill:#363236;stroke:#FFFFFF;stroke-width:2"/>` +
+                       `<svg x="6" y="6" width="24" height="24" viewBox="0 0 24 24" style="color:#FFFFFF">${ROBOT_PATH}</svg>`;
+        layer.append(rb);
+      }
       box.firstElementChild.append(layer);
     }
 
@@ -1586,42 +1938,7 @@ _TEMPLATE = r"""<!doctype html>
     }
   }
 
-  // ---------------------------------------------------------------- 테마 (라이트 기본, 아이콘 버튼: 라이트에서 달, 다크에서 해)
-  const MOON = '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>';
-  const SUN = '<circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/>' +
-              '<path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.5 1.5M17.2 17.2l1.5 1.5M5.3 18.7l1.5-1.5M17.2 6.8l1.5-1.5" ' +
-              'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>';
-  function applyTheme(t) {
-    root.dataset.theme = t;
-    const btn = $("theme-toggle");
-    btn.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${t === "dark" ? SUN : MOON}</svg>`;
-    btn.setAttribute("aria-label", t === "dark" ? "라이트 테마로 보기" : "다크 테마로 보기");
-    btn.setAttribute("aria-pressed", String(t === "dark"));
-    for (const f of state.themeHooks) f();
-  }
-  $("theme-toggle").addEventListener("click", () => {
-    const next = root.dataset.theme === "light" ? "dark" : "light";
-    try { localStorage.setItem("stepmap-theme", next); } catch (e) { /* 저장 못 해도 이번 화면에는 적용 */ }
-    applyTheme(next);
-  });
-  applyTheme(root.dataset.theme === "dark" ? "dark" : "light");
-
-  // ---------------------------------------------------------------- 지도 배경 (밝은 지도 기본, 페이지 테마와 따로)
-  const MAP_KEY = "stepmap-map";
-  function applyMapStyle(m) {
-    $("mapcard").dataset.map = m;
-    for (const b of document.querySelectorAll(".map-seg button")) b.setAttribute("aria-pressed", String(b.dataset.map === m));
-    for (const f of state.themeHooks) f();  // 평면 지도는 색을 직접 칠하므로 다시 칠한다 (마커는 CSS 변수라 그대로 바뀐다)
-  }
-  for (const b of document.querySelectorAll(".map-seg button")) {
-    b.addEventListener("click", () => {
-      try { localStorage.setItem(MAP_KEY, b.dataset.map); } catch (e) { /* 저장 못 해도 이번 화면에는 적용 */ }
-      applyMapStyle(b.dataset.map);
-    });
-  }
-  let savedMap = null;
-  try { savedMap = localStorage.getItem(MAP_KEY); } catch (e) { /* 저장소를 못 쓰면 기본값 */ }
-  applyMapStyle(savedMap === "dark" ? "dark" : "light");
+  // 화면은 라이트, 지도는 밝은 지도로 고정 (<html data-theme="light">, #mapcard data-map="light")
 
   // ---------------------------------------------------------------- 위쪽 바: 마지막 점검 날짜 (마우스를 올리면 측정 시간·구간·로봇)
   if (DATA.t0 != null) {
@@ -1629,7 +1946,6 @@ _TEMPLATE = r"""<!doctype html>
     d.append(el("span", "k", "마지막 점검 "), el("b", null, `${pt.year}.${pt.month}.${pt.day}`));
     d.setAttribute("title", [`측정 ${fmtDateTime(DATA.t0)} ~ ${fmtHM(DATA.t1)}`, DATA.area, DATA.robot].filter(Boolean).join(" · "));
   }
-  $("home-sub").textContent = [DATA.session, DATA.area, DATA.t0 != null ? fmtDateTime(DATA.t0) : ""].filter(Boolean).join(" · ");
 
   // ---------------------------------------------------------------- KPI 공용 계산 (종합 현황 · 점검 이력이 같은 함수를 쓴다)
   const countLevel = (list, lv) => list.filter((e) => e.level === lv).length;
@@ -1640,28 +1956,7 @@ _TEMPLATE = r"""<!doctype html>
     node.textContent = Math.round(meters).toLocaleString("ko-KR");
     node.append(el("small", null, "m"));
   }
-  // 위험·주의 배지 + 개수
-  function putLevelBadges(box, list, levels = ["danger", "warn"]) {
-    box.replaceChildren();
-    for (const lv of levels) {
-      const s = el("span"); s.append(lvBadge(lv), document.createTextNode(` ${countLevel(list, lv)}`)); box.append(s);
-    }
-  }
   for (const l of document.querySelectorAll(".kpi .label")) l.setAttribute("title", l.textContent.replace(/\s+/g, " ").trim());
-
-  // ---------------------------------------------------------------- 종합 현황: KPI
-  {
-    const visualEv = DATA.events.filter((e) => e.kind !== "loose");
-    const looseEv = DATA.events.filter((e) => e.kind === "loose");
-    putDistance($("k-dist"), DATA.distance_m);
-    $("k-dist-sub").textContent = `측정 지점 ${DATA.events.length}개`;
-    $("k-visual").textContent = countLevel(visualEv, "danger") + countLevel(visualEv, "warn");
-    putLevelBadges($("k-visual-sub"), visualEv);
-    $("k-loose").textContent = countLevel(looseEv, "danger") + countLevel(looseEv, "warn");
-    putLevelBadges($("k-loose-sub"), looseEv);
-    $("k-ok").textContent = countLevel(DATA.events, "ok");
-    $("k-ok-sub").textContent = `전체 ${DATA.events.length}개 중`;
-  }
 
   // ---------------------------------------------------------------- 종합 현황: 범례 (판정 필터 버튼 + 회색 모양 범례)
   function setShown(lv, on) {
@@ -2125,86 +2420,242 @@ _TEMPLATE = r"""<!doctype html>
     D.scrollToDetail = false;
   }
 
-  // ---------------------------------------------------------------- 종합 현황: 지도 옆 상세 패널
-  // 측정 방식 (events.csv source)
-  const SOURCE_LABEL = { camera: "카메라", foot: "발 접촉", "camera+foot": "카메라 + 발 접촉" };
+  // ---------------------------------------------------------------- 종합 현황: 아래 블록 줄 (로봇 카드 + 지점 블록)
+  // 로봇 카드는 늘 보인다. 지점 블록은 지도에서 마커를 누르거나 ← → 로 고른 때(#home/<id>)만.
+  // ← →와 로봇개 누르기의 순서·지점은 Python home_cards (위험→주의, 같은 판정은 exceed_ratio 큰 순 / 가장 최근 위험 지점)
+  const HOME = DATA.home || { order: [], default: null };
   const CLOSE_ICON = '<path d="M6 6l12 12M18 6 6 18" style="fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round"/>';
+  const GO_ICON = '<path d="M7 17 17 7M9 7h8v8" style="fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"/>';
   function closePanel() { location.replace("#home"); }
-  function renderPanel() {
-    const box = $("dpanel");
-    box.replaceChildren();
-    const e = state.sel && byId[state.sel.id];
-    if (!e) {
-      const p = el("p", "dp-empty");
-      p.append(svgIcon("loose", null), document.createTextNode("지도에서 지점을 누르면 사진과 근거가 여기에 표시돼요"));
-      box.append(p);
-      return;
+  const cardEvent = () => (state.sel && byId[state.sel.id]) || null;
+  function openRobotCard() {
+    const e = byId[HOME.default];
+    if (!e) return;
+    if (!shown[e.level]) setShown(e.level, true);
+    pick(e);
+  }
+  // ← →: 이전·다음 지점 (지도 마커 누르기와 같은 동작). 아무것도 고르지 않았으면 →는 첫 지점(가장 심한 위험), ←는 마지막
+  function stepPick(dir) {
+    const order = HOME.order;
+    if (!order.length) return;
+    const i = state.sel ? order.indexOf(state.sel.id) : -1;
+    const e = byId[i < 0 ? order[dir > 0 ? 0 : order.length - 1] : order[(i + dir + order.length) % order.length]];
+    if (!shown[e.level]) setShown(e.level, true);
+    pick(e);
+  }
+  $("rc-prev").addEventListener("click", () => stepPick(-1));
+  $("rc-next").addEventListener("click", () => stepPick(1));
+
+  // 로봇 카드: 이름(config robot.name), 모델, 배터리(robot.battery, 없으면 줄 숨김), 센서, 점검 일시, 이동 거리(display_meters),
+  // 사진(robot.png, 없으면 직접 그린 그림)
+  {
+    $("rc-name").textContent = DATA.robot || "점검 로봇";
+    $("rc-model").textContent = DATA.robot_model || "—";
+    const hasBattery = DATA.robot_battery != null;
+    $("rc-battery-k").hidden = $("rc-battery").hidden = !hasBattery;
+    if (hasBattery) $("rc-battery").textContent = `${DATA.robot_battery}%`;
+    $("rc-sensors").textContent = (DATA.robot_sensors || []).join(" · ") || "—";
+    if (DATA.t0 != null) {
+      const pt = tparts(DATA.t0);
+      $("rc-when").textContent = `${pt.year}-${pt.month}-${pt.day} ${pt.hour}:${pt.minute}`;
+    } else {
+      $("rc-when").textContent = "—";
     }
-    const close = el("button", "dp-close");
+    $("rc-dist").textContent = DATA.meters != null ? `${DATA.meters.toLocaleString("ko-KR")} m` : "—";
+    const img = $("rc-photo"), draw = $("rc-draw");
+    if (DATA.robot_photo) {
+      img.src = DATA.robot_photo;
+      img.hidden = false;
+      draw.hidden = true;
+      img.parentElement.classList.add("photo");
+      img.addEventListener("error", () => { img.hidden = true; draw.hidden = false; img.parentElement.classList.remove("photo"); });  // 사진 파일이 없으면 그림으로
+      // 사진 폭: 카드 오른쪽 45% 안, 칩 줄 오른쪽 끝 + 12px보다 오른쪽만. --shot-w = 실제로 그려진 사진 폭 (그림자 폭 기준)
+      const art = img.parentElement, card = art.parentElement;
+      const fitRobotPhoto = () => {
+        if (!art.classList.contains("photo") || !img.naturalWidth) return;
+        const box = card.getBoundingClientRect();
+        const chipRight = Math.max(0, ...[...card.querySelectorAll(".rc-dl dd")].filter((d) => !d.hidden).map((d) => d.getBoundingClientRect().right - box.left));
+        art.style.height = "";
+        const want = art.clientHeight * img.naturalWidth / img.naturalHeight;  // 높이 92%일 때 사진 폭
+        const room = box.width - (chipRight + 13);                             // 칩 오른쪽 끝 + 12px부터 카드 오른쪽 끝까지
+        // 오른쪽 여백: 자리가 남으면 왼쪽으로(최대 44px), 모자라면 16px까지 줄여 사진을 최대로 (머리는 버튼 왼쪽에 오게)
+        const R = Math.max(16, Math.min(44, room - want));
+        const w = Math.max(0, Math.min(want, room - R));
+        art.style.right = `${R}px`;
+        art.style.width = `${w}px`;
+        art.style.setProperty("--shot-w", `${w}px`);
+      };
+      img.addEventListener("load", fitRobotPhoto);
+      const ro = new ResizeObserver(fitRobotPhoto);
+      ro.observe(card);
+      for (const d of card.querySelectorAll(".rc-dl dd")) ro.observe(d);  // 칩 폭이 바뀌면 (글꼴 로딩 등) 다시 맞춘다
+      if (document.fonts) document.fonts.ready.then(fitRobotPhoto);
+    }
+  }
+
+  // 반원 게이지: f(0~1) 위치까지 등급 색 + 빗금, marks: 작은 점 [[위치, 색]]
+  let gaugeSeq = 0;
+  function halfGauge(f, level, marks, label) {
+    const id = `hbh${++gaugeSeq}`, R = 44, cx = 52, cy = 54, len = Math.PI * R, k = Math.max(0, Math.min(f, 1));
+    const at = (m) => { const a = Math.PI * (1 - Math.max(0, Math.min(m, 1))); return [cx + R * Math.cos(a), cy - R * Math.sin(a)]; };
+    const arc = `M${cx - R} ${cy}A${R} ${R} 0 0 1 ${cx + R} ${cy}`;
+    const svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("viewBox", "0 0 104 62");
+    svg.setAttribute("class", "hb-gauge");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", label);
+    svg.innerHTML =
+      `<defs><pattern id="${id}" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">` +
+      `<rect width="6" height="6" style="fill:var(--${level})"/><rect width="2.2" height="6" style="fill:rgb(255 255 255 / 0.45)"/></pattern></defs>` +
+      `<path d="${arc}" style="fill:none;stroke:var(--gauge-track);stroke-width:12;stroke-linecap:round"/>` +
+      (k > 0 ? `<path d="${arc}" style="fill:none;stroke:url(#${id});stroke-width:12;stroke-linecap:round;stroke-dasharray:${(len * k).toFixed(1)} ${len.toFixed(1)}"/>` : "") +
+      marks.map(([m, c]) => { const [x, y] = at(m); return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.4" style="fill:${c};stroke:var(--glass-solid);stroke-width:1.6"/>`; }).join("");
+    return svg;
+  }
+  const UNIT_TXT = { cm: "cm", deg: "°", mm: "mm", score: "" };
+  const withUnit = (v, unit) => (unit === "deg" ? `${v}°` : UNIT_TXT[unit] ? `${v} ${UNIT_TXT[unit]}` : `${v}`);
+  // 측정 방식 아이콘: 카메라 · LiDAR · 발 접촉 (이번 지점에 쓴 것만 진하게)
+  const METHOD_ICONS = [
+    ["camera", "카메라", CAMERA],
+    ["lidar", "LiDAR", '<circle cx="12" cy="12" r="3.2" style="fill:none;stroke:currentColor;stroke-width:1.8"/>' +
+                       '<path d="M5 12a7 7 0 0 1 2-5M19 12a7 7 0 0 0-2-5M2 12a10 10 0 0 1 3-7M22 12a10 10 0 0 0-3-7" style="fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round"/>'],
+    ["foot", "발 접촉", '<g style="fill:currentColor"><ellipse cx="12" cy="15" rx="4.2" ry="3.4"/><circle cx="7.4" cy="9.6" r="1.8"/>' +
+                       '<circle cx="12" cy="7.6" r="1.9"/><circle cx="16.6" cy="9.6" r="1.8"/></g>'],
+  ];
+  const methodsUsed = (e) => ({ camera: e.source.includes("camera"), lidar: false, foot: e.source.includes("foot") });
+
+  function blockPhoto(e, onMissing) {
+    const p = e.photo, pic = el("div", "hb-pic");
+    const img = el("img");
+    img.src = p.src;
+    img.alt = `${KIND[e.kind].label} ${fmtValue(e)} 현장 사진`;
+    img.addEventListener("error", onMissing);
+    pic.append(img);
+    if (e.kind === "loose" && p.mark) {
+      const [u, v, r] = p.mark, R = r * Math.min(p.w, p.h);
+      const svg = document.createElementNS(SVGNS, "svg");
+      svg.setAttribute("viewBox", `0 0 ${p.w} ${p.h}`);
+      svg.setAttribute("preserveAspectRatio", "xMidYMid slice");  // 칸에 꽉 채워 자른 사진과 같게
+      svg.setAttribute("aria-hidden", "true");
+      const ring = (stroke, w, dash) => `<circle cx="${u * p.w}" cy="${v * p.h}" r="${R}" vector-effect="non-scaling-stroke" ` +
+        `style="fill:none;stroke:${stroke};stroke-width:${w}${dash ? ";stroke-dasharray:7 5" : ""}"/>`;
+      svg.innerHTML = ring("#FFFFFF", 5, false) + ring(`var(--${e.level})`, 2.5, true);
+      const mk = el("span", "hb-mk", "발 접촉 위치");
+      // 라벨: 동그라미 바로 아래 (cover로 잘린 비율에 맞춰 위치 계산)
+      const place = () => {
+        const W = pic.clientWidth, Hh = pic.clientHeight;
+        if (!W || !Hh) return;
+        const k = Math.max(W / p.w, Hh / p.h), ox = (W - p.w * k) / 2, oy = (Hh - p.h * k) / 2;
+        const x = ox + u * p.w * k, y = oy + (v * p.h + R) * k + 4;
+        mk.style.left = `${Math.max(48, Math.min(W - 48, x))}px`;
+        mk.style.top = `${Math.min(Hh - 22, y)}px`;
+      };
+      new ResizeObserver(place).observe(pic);
+      pic.append(svg, mk);
+    }
+    return pic;
+  }
+
+  function renderBlocks() {
+    const box = $("hblocks");
+    const e = cardEvent();
+    box.replaceChildren();
+    box.hidden = !e;
+    $("hrow").classList.toggle("open", !!e);
+    if (!e) return;
+    const th = DATA.thresholds[e.kind], unit = e.unit;
+    const close = el("button", "hb-close");
     close.type = "button";
-    close.setAttribute("aria-label", "상세 닫기");
+    close.setAttribute("aria-label", "지점 블록 닫기");
     close.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${CLOSE_ICON}</svg>`;
     close.addEventListener("click", closePanel);
 
-    // a. 판정 배지 + 종류 + 지점 id
-    const head = el("div", "dp-head");
-    const kind = el("span", "kind");
-    kind.append(svgIcon(e.kind, e.level), el("span", null, KIND[e.kind].label));
-    head.append(lvBadge(e.level), kind, el("span", "id", e.id));
-    box.append(close, head);
+    // a. 사진 블록: 손상 사진(흔들림은 점선 동그라미 + 작은 "발 접촉 위치" 라벨), 위 왼쪽에 등급 배지 + 종류 + id
+    const ph = el("div", "glass hb hb-photo");
+    const noPhoto = () => { const np = el("div", "no-photo"); np.append(svgIcon(e.kind, null), el("span", null, "사진 없음")); return np; };
+    if (e.photo) {
+      const btn = el("button", "ph-btn");
+      btn.type = "button";
+      btn.setAttribute("aria-label", "사진 크게 보기");
+      btn.append(blockPhoto(e, () => btn.replaceWith(noPhoto())));
+      btn.addEventListener("click", () => openPhoto(e));
+      ph.append(btn);
+    } else {
+      ph.append(noPhoto());
+    }
+    const tag = el("span", "hb-tag");
+    tag.append(lvBadge(e.level), el("span", null, KIND[e.kind].label), el("span", "id", e.id));
+    ph.append(tag);
 
-    const ok = e.level === "ok";
-    // b. 사진 (흔들림 image_mark는 점선 동그라미를 겹친다). 정상 지점은 사진·근거 대신 "기준 이내"
-    if (!ok) {
-      const noPhoto = () => { const np = el("div", "no-photo"); np.append(svgIcon(e.kind, null), el("span", null, "사진 없음")); return np; };
-      if (e.photo) {
-        const btn = el("button", "ph-btn");
-        btn.type = "button";
-        btn.setAttribute("aria-label", "사진 크게 보기");
-        btn.append(photoView(e, () => btn.replaceWith(noPhoto()), true));
-        btn.addEventListener("click", () => openPhoto(e));
-        box.append(btn);
-      } else {
-        box.append(noPhoto());
-      }
+    // b. 측정값 블록: 큰 숫자 + 단위, 반원 게이지(위험 기준의 2배를 가득, 주의·위험 기준에 점)
+    const nb = el("div", "glass hb hb-num");
+    const h1 = el("div", "hb-head");
+    h1.append(el("span", "t", "측정값"), el("span", "s", `위험 기준 ${withUnit(th[1], unit)}`));
+    const big = el("div", "hb-big", fmtNum(e.value, unit));
+    if (UNIT_TXT[unit] || unit === "score") big.append(el("small", null, unit === "score" ? "점" : UNIT_TXT[unit]));
+    const span = th[1] * 2, nbody = el("div", "hb-body");
+    nbody.append(big, halfGauge(e.value / span, e.level, [[th[0] / span, "var(--warn)"], [th[1] / span, "var(--danger)"]],
+                                `측정값 ${fmtValue(e)}, 주의 기준 ${withUnit(th[0], unit)}, 위험 기준 ${withUnit(th[1], unit)}`));
+    nb.append(h1, nbody);
+
+    // c. 기준 대비 블록: exceed_ratio (기준의 3배를 가득, 기준 위치에 점). 정상이면 "기준 이내"
+    const rb = el("div", "glass hb hb-ratio");
+    const h2 = el("div", "hb-head");
+    h2.append(el("span", "t", "기준 대비"), el("span", "s", e.level === "danger" ? "위험 기준" : "주의 기준"));
+    const ratio = Number(e.ratio);
+    const rbig = e.level === "ok" ? el("div", "hb-big txt", "기준 이내") : el("div", "hb-big", ratio.toFixed(1));
+    if (e.level !== "ok") rbig.append(el("small", null, "배"));
+    const rbody = el("div", "hb-body");
+    rbody.append(rbig, halfGauge(ratio / 3, e.level, [[1 / 3, "var(--text)"]], `기준의 ${ratio.toFixed(1)}배`));
+    rb.append(h2, rbody);
+
+    // d. 근거 블록: criterion_text, 위치·측정 시각, 측정 방식 아이콘, 흔들림 확정/의심 + 추가 침하, 오른쪽 위 ↗ 자세히 보기 · × 닫기
+    const wb = el("div", "glass hb hb-why");
+    wb.append(el("p", "crit", `기준 ${criterion(e)}`),
+              el("p", "meta", `${Number(e.lat).toFixed(6)}, ${Number(e.lon).toFixed(6)} · ${fmtDateTimeS(e.t)}`));
+    if (e.kind === "loose") {
+      const sink = el("div", "sink");
+      if (e.confirm) sink.append(el("span", "hb-cf", e.confirm));
+      sink.append(el("span", null, `추가 침하 ${fmtNum(e.value, unit)} mm`));
+      wb.append(sink);
     }
-    // c. 측정값
-    const big = el("div", "v-big");
-    big.append(el("span", "num", fmtNum(e.value, e.unit)), el("span", "unit", e.unit === "score" ? "균열 점수 (0~1)" : UNIT[e.unit]));
-    box.append(big);
-    // d. 근거: criterion_text + exceed_ratio (검사 결과 상세와 같은 문구, 균열 점수는 배수 표시 안 함)
-    const crit = el("p", "v-crit");
-    if (ok) crit.textContent = "기준 이내";
-    else {
-      crit.append(el("span", "k", "기준 "), document.createTextNode(criterion(e)));
-      if (e.kind !== "crack") crit.append(el("span", "x", ` · 기준의 ${Number(e.ratio).toFixed(1)}배`));
+    const used = methodsUsed(e), ms = el("div", "hb-methods");
+    for (const [k, label, path] of METHOD_ICONS) {
+      const m = el("span", `m${used[k] ? " on" : ""}`);
+      const ic = document.createElementNS(SVGNS, "svg");
+      ic.setAttribute("viewBox", "0 0 24 24");
+      ic.setAttribute("aria-hidden", "true");
+      ic.innerHTML = path;
+      m.append(ic, el("span", null, label));
+      m.setAttribute("aria-label", `${label} ${used[k] ? "사용" : "사용 안 함"}`);
+      ms.append(m);
     }
-    box.append(crit);
-    // e·f. 위치, 측정 시각·방식
-    const info = el("section", "v-basis");
-    const dl = el("dl");
-    const row = (k, v) => dl.append(el("dt", null, k), el("dd", null, v));
-    row("위치", `${Number(e.lat).toFixed(6)}, ${Number(e.lon).toFixed(6)}`);
-    if (!ok) {
-      row("측정 시각", fmtDateTimeS(e.t));
-      row("측정 방식", `${SOURCE_LABEL[e.source] || e.source}${e.leg ? ` · ${legName(e.leg)}` : ""}`);
-    }
-    info.append(dl);
-    box.append(info);
-    // g. 자세히 보기: 검사 결과 페이지
-    const act = el("div", "dp-actions");
-    const more = el("a", "btn primary", "자세히 보기");
-    more.href = detailHref(e);
-    more.setAttribute("aria-label", `자세히 보기 (${PAGES.detail.title})`);
-    act.append(more);
-    box.append(act);
+    const go = el("a", "hb-go");
+    go.href = detailHref(e);
+    go.setAttribute("aria-label", `자세히 보기 (${PAGES.detail.title})`);
+    go.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${GO_ICON}</svg>`;
+    const acts = el("div", "hb-acts");
+    acts.append(go, close);
+    wb.append(ms, acts);
+
+    box.append(ph, nb, rb, wb);
+    box.classList.remove("in");
+    void box.offsetWidth;  // 다시 고를 때도 올라오는 움직임을 다시 시작
+    box.classList.add("in");
   }
+  // 고른 지점이 블록 줄·필터 카드에 가리지 않게 (이미 보이면 움직이지 않는다)
+  function ensureVisible(e) {
+    if (state.mode !== "tiles" || !state.map || !e) return;
+    const P = homePadding();
+    state.map.panInside([e.lat, e.lon], { paddingTopLeft: P.tl, paddingBottomRight: P.br, animate: !reduceMotion.matches });
+  }
+  wideHome.addEventListener("change", () => { if (state.map) state.map.invalidateSize({ animate: false }); });
 
-  // 종합 현황 지도에서 지점 위치 보기 (#home/<id>): 확대하고 선택 표시
+  // 종합 현황 지도에서 지점 위치 보기 (#home/<id>): 선택 표시 + 그 지점이 보이게
   function focusOnMap(e) {
     if (!shown[e.level]) setShown(e.level, true);  // 꺼진 판정의 지점이면 그 판정을 켠다
-    if (state.mode === "tiles" && state.map) state.map.setView([e.lat, e.lon], state.map.getMaxZoom(), { animate: false });
     renderMap();
+    ensureVisible(e);
   }
 
   // ---------------------------------------------------------------- 주소 해시로 페이지·선택 지점 (뒤로 가기 동작)
@@ -2709,8 +3160,8 @@ _TEMPLATE = r"""<!doctype html>
       showMap();
       if (id && fromOtherPage && !state.pickedOnMap) focusOnMap(byId[id]);
       else if (id && !shown[byId[id].level]) setShown(byId[id].level, true);
-      renderPanel();
-      if (state.map) state.map.invalidateSize({ animate: false });  // 패널 높이·배치가 바뀌면 지도 크기를 다시 잰다
+      renderBlocks();
+      if (state.map) state.map.invalidateSize({ animate: false });  // 화면 크기·배치가 바뀌었으면 지도 크기를 다시 잰다
     }
     state.pickedOnMap = false;
     if (page === "detail") renderDetailPage();

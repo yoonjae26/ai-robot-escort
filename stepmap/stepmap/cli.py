@@ -131,8 +131,12 @@ def cmd_map(args: argparse.Namespace) -> int:
     from .events import FormatError, load_config
 
     cfg = load_config(args.config) if Path(args.config).exists() else {}
+    robot = cfg.get("robot") or {}
     meta = {"area": str((cfg.get("report") or {}).get("area") or ""),
-            "robot": str((cfg.get("robot") or {}).get("name") or "")}
+            "robot": str(robot.get("name") or ""),
+            "model": str(robot.get("model") or ""),
+            "sensors": [str(x) for x in robot.get("sensors") or []],
+            "battery": robot.get("battery")}
     try:
         out = write_dashboard(args.events, args.trajectory, args.output, _thresholds(args.config), meta, args.traces,
                               args.history, args.blocks, _block_size(args.config))

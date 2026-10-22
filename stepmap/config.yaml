@@ -17,7 +17,10 @@ calib:
   camera_tilt_offset_deg: 0.0        # 평지 정지 녹화로 구함
   imu_pitch_sign: 1
 robot:                               # URDF(go2_description)와 대조
-  name: Unitree Go2 EDU              # 대시보드 측정 세션 정보의 '로봇'
+  name: Go2-01                       # 종합 현황 로봇 카드의 이름 칸 (모델명은 model)
+  model: Unitree Go2 EDU             # 종합 현황 로봇 카드의 '모델'
+  sensors: [LiDAR, 깊이 카메라, 발 접촉]  # 종합 현황 로봇 카드의 '센서'
+  battery: 72                        # 종합 현황 로봇 카드의 '배터리' (%, 없으면 줄을 숨긴다)
   hip_x: 0.1934
   hip_y: 0.0465
   l1: 0.0955
