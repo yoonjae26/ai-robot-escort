@@ -11,7 +11,8 @@ Sources (all optional; whatever is running is used):
              slope [deg], cross slope in the note (StepMap has one slope kind). Place = robot + middle of the ROI ahead.
       step   each confirmed step (>= confirm_n views): |dz| [cm] at robot + step distance ahead. Seeing the same step
              again (same 0.5 m cell) updates it, keeping the closest view.
-  logs/inspect/<session>/state.json (inspect_node.py): sunken / raised tiles and holes -> step [cm] with the snapshot.
+  logs/inspect/<session>/state.json (inspect_node.py): sunken / raised tiles, holes, 파손 (broken, damage AI + depth)
+      and 요철 (unevenness) -> step [cm]; 균열 (crack, damage AI, flat) -> crack [score 0-1]; with the snapshot.
 Photos: camera steps and slopes >= slope_photo_deg get the latest camera picture (photo_src, written by inspect_node
   several times a second, the coloured segmentation view) taken when the event is sent, if it is fresh (< 2 s).
   The camera looks ahead at the measured spot, so the dashboard shows what the robot saw there.
@@ -235,16 +236,25 @@ class Bridge(Node):
         for e in st.get("events", []):
             snap = folder / "snap" / (e.get("snap") or "")
             mtime = snap.stat().st_mtime if snap.is_file() else 0
-            if self.inspect_seen.get(e["id"]) == (e["h_mm"], mtime):
+            sig = (e["h_mm"], e.get("score"), mtime)
+            if self.inspect_seen.get(e["id"]) == sig:
                 continue
-            self.inspect_seen[e["id"]] = (e["h_mm"], mtime)
+            self.inspect_seen[e["id"]] = sig
             image, data = "", None
             if mtime:
                 image, data = "img/%s_E%s.jpg" % (folder.name, e["id"]), snap.read_bytes()
-            self.event("inspect:%s:%s" % (folder.name, e["id"]), "step", abs(e["h_mm"]) / 10.0, "cm", e["x"], e["y"],
-                       min(1.0, e.get("n_obs", 3) / 10.0),
-                       "%s %+.1f mm · 면적 %.0f cm² (관측 %d회)" % (e["kind"], e["h_mm"], e.get("area_cm2", 0),
-                                                              e.get("n_obs", 0)), image, data)
+            key, conf = "inspect:%s:%s" % (folder.name, e["id"]), min(1.0, e.get("n_obs", 3) / 10.0)
+            if e["kind"] == "균열":                                   # crack: AI score, StepMap crack_warn/danger
+                self.event(key, "crack", e["score"], "score", e["x"], e["y"], conf,
+                           "균열 (AI %.2f, 평평함) · 관측 %d회" % (e["score"], e.get("n_obs", 0)), image, data)
+            elif e["kind"] in ("파손", "요철"):
+                what = "파손 (AI + 깊이)" if e["kind"] == "파손" else "요철 (바닥 높이 편차)"
+                self.event(key, "step", abs(e["h_mm"]) / 10.0, "cm", e["x"], e["y"], conf,
+                           "%s %.1f mm · 관측 %d회" % (what, abs(e["h_mm"]), e.get("n_obs", 0)), image, data)
+            else:
+                self.event(key, "step", abs(e["h_mm"]) / 10.0, "cm", e["x"], e["y"], conf,
+                           "%s %+.1f mm · 면적 %.0f cm² (관측 %d회)" % (e["kind"], e["h_mm"], e.get("area_cm2", 0),
+                                                                  e.get("n_obs", 0)), image, data)
 
 
 def main():

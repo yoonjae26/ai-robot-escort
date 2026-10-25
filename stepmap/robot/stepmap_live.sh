@@ -18,4 +18,10 @@ trap 'kill $LIVE 2>/dev/null' EXIT
 IP=$(hostname -I | awk '{print $1}')
 echo "session $SESSION: live server pid $LIVE (log $D/live.log), dashboard http://$IP:8060/"
 echo "  phone GPS (내 위치로 보정): https://$IP:8443/  (self-signed certificate: accept once)"
+# loose paving blocks from the feet (foot_node.py, same session/outbox server), if installed
+if [ -f ~/terrain_dataset/foot_node.py ]; then
+  python3 ~/terrain_dataset/foot_node.py --ros-args -p session:="$SESSION" >> "$D/foot.log" 2>&1 &
+  FOOT=$!
+  trap 'kill $LIVE $FOOT 2>/dev/null' EXIT
+fi
 python3 ~/terrain_dataset/stepmap_bridge.py --ros-args -p session:="$SESSION"
