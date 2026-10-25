@@ -1804,6 +1804,7 @@ _TEMPLATE = r"""<!doctype html>
                                              html: `<span class="pulse"></span><span class="core"><svg viewBox="0 0 24 24" aria-hidden="true">${ROBOT_PATH}</svg></span>` }),
                            keyboard: true, zIndexOffset: 5000, title: "로봇 마지막 위치" }).addTo(map);
       robot.on("click", openRobotCard);  // 로봇개를 누르면 가장 최근에 찾은 위험 지점(없으면 주의)
+      window.stepmapMoveRobot = (ll) => robot.setLatLng(ll);  // 실시간(live): 다시 그리지 않고 로봇 위치만 옮긴다
       robot.getElement().setAttribute("role", "button");
       robot.getElement().setAttribute("aria-label", "로봇 마지막 위치: 가장 최근에 찾은 위험 지점 보기");
     }

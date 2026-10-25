@@ -162,7 +162,7 @@ def cmd_live(args: argparse.Namespace) -> int:
         except ValueError:
             print("stepmap live: --geo는 LAT,LON[,HEADING] 형식", file=sys.stderr)
             return 1
-    serve(args.dir, args.port, args.config, args.pull, geo, args.host, args.camera)
+    serve(args.dir, args.port, args.config, args.pull, geo, args.host, args.camera, args.https_port)
     return 0
 
 
@@ -223,7 +223,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "끊길 때 다음 주소로 자동 전환 (유선·Go2 WiFi·핫스팟·Tailscale)")
     p.add_argument("--camera", metavar="JPG", help="실시간 카메라 사진 파일 (기본: 로봇은 /dev/shm/terrain_live.jpg, "
                                                      "--pull이면 로봇에서 받아 전달)")
-    p.add_argument("--geo", metavar="LAT,LON[,HEADING]", help="출발점 위도·경도·odom x축 방위각 (config.yaml geo 대신)")
+    p.add_argument("--geo", metavar="LAT,LON[,HEADING]", help="출발점 위도·경도·odom x축 방위각 (config.yaml geo 대신). "
+                                                         "없으면 대시보드의 '내 위치로 보정'(기기 GPS)으로 맞춘다")
+    p.add_argument("--https-port", type=int, metavar="PORT",
+                   help="https도 연다 (자체 서명 인증서). 휴대폰 브라우저는 https에서만 위치를 알려 준다. 예: 8443")
     p.add_argument("-c", "--config", default="config.yaml",
                    help="판정 기준·merge·geo·로봇 정보를 읽을 설정 파일 (기본: config.yaml)")
     p.set_defaults(func=cmd_live)

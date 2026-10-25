@@ -19,6 +19,12 @@
   {"type": "trace", "key": "<걸음 키>", "rows": [foot_traces 열, id 빈칸 + t_event]}
   {"type": "status", "row": {"battery": 72, ...}}          로봇 상태 (CSV에는 넣지 않고 화면용)
   {"type": "file", "path": "img/xx.jpg"}                    사진이 도착했다는 표시 (복제 쪽이 GET /files/로 받아 간다)
+  {"type": "gps", "row": {"t", "lat", "lon", "acc", "x", "y"}}  대시보드를 연 기기(휴대폰·노트북)의 GPS 위치와 그 순간의
+      로봇 odom 위치. 짝이 쌓이면 odom → 위도·경도 변환(GeoRef)을 GPS로 맞춘다 (gps.py). config/--geo가 있으면 그것이 먼저
+
+위치: 로봇에는 GPS가 없다. 대시보드의 "내 위치로 보정"을 누르면 브라우저가 기기 위치를 POST /api/gps로 보내고,
+로봇 서버가 그때의 odom 위치와 짝지어 stream에 저장한다 (노트북 복제본은 받은 위치를 로봇으로 넘긴다).
+브라우저 위치 기능은 https 또는 localhost에서만 되므로 휴대폰은 --https-port(자체 서명 인증서) 주소로 연다.
 
 시계: Jetson은 RTC 배터리가 없어 인터넷이 없으면 1970년부터 다시 센다. 로봇 쪽 시각이 CLOCK_VALID보다 작으면,
 노트북이 /api/since?now=<노트북 시각>으로 처음 연결될 때 차이(clock_offset)를 기록하고, CSV·대시보드에는
@@ -38,6 +44,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from .gps import fit_geo, shift_m
 from .events import (_NUMERIC_DIGITS, EVENT_COLUMNS, FOOT_TRACE_COLUMNS, FormatError, GeoRef, georef_from_config,
                      link_foot_traces, load_config, merge_events, merge_from_config, thresholds_from_config,
                      validate_events, validate_foot_traces, vworld_key_from_config, write_events, write_foot_traces,
@@ -53,6 +60,8 @@ PULL_PERIOD_S = 1.0
 # config.yaml의 geo가 아직 <...>이면 지도에 필요한 위도·경도를 이 기준점으로 만든다 (위치는 출발점 기준 상대값).
 # 실제 지도 위치가 필요하면 config.yaml geo 또는 --geo LAT,LON,HEADING
 FALLBACK_GEO = GeoRef(33.4860373, 126.4866073, 0.0)
+GEO_SHIFT_M = 2.0                # GPS 보정이 이만큼 이상 바뀔 때만 지도를 다시 그린다 (위치가 올 때마다 새로고침하지 않게)
+GPS_MIN_GAP_S = 1.0              # 이보다 자주 오는 위치는 버린다
 
 def _latest(events: list[dict]) -> str | None:
     """새 측정이 들어왔을 때 화면에 띄울 지점: 가장 최근의 위험·주의 지점 (없으면 가장 최근 지점)."""
@@ -79,9 +88,13 @@ LIVE_SCRIPT = """
   .sm-cam span { position: absolute; left: 10px; top: 8px; padding: 4px 10px; border-radius: 999px; background: rgb(31 28 31 / 0.6);
                  color: #fff; font: 600 11px/1.2 "Pretendard Variable", "Malgun Gothic", system-ui, sans-serif; }
   @media (max-width: 1100px) { .sm-live { top: 68px; } .sm-cam { top: 122px; } .sm-live .muted { display: none; } }
+  @media (max-width: 640px) { .sm-live { left: 16px; flex-wrap: wrap; justify-content: flex-end; } .sm-live .pill { height: 36px; padding: 0 12px; } }
 </style>
 <div class="sm-cam" id="stepmap-live-cam"><img id="stepmap-live-img" alt="실시간 카메라"><span id="stepmap-live-camtxt">실시간 카메라</span></div>
 <div class="sm-live">
+ <button class="pill" id="stepmap-gps-btn" type="button" aria-pressed="false" title="이 기기의 GPS 위치로 로봇의 실제 위치를 맞춥니다 (기기를 로봇 가까이에 두고)"><svg
+  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path
+  d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg><span id="stepmap-gps">위치</span></button>
  <div class="pill" id="stepmap-live-box"><i class="dot"></i><span id="stepmap-live">실시간 연결 중…</span><span class="muted" id="stepmap-live-t"></span></div>
  <button class="pill" id="stepmap-live-cambtn" type="button" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
   stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>카메라</button>
@@ -98,6 +111,58 @@ LIVE_SCRIPT = """
     sessionStorage.removeItem("stepmap-open");
     if (want && /^#?(home)?[/]?$/.test(location.hash)) location.hash = "#home/" + want;
   } catch (e) {}
+  // 위치 보정: 이 기기의 GPS 위치를 2초마다 서버로 보낸다 (서버가 그 순간의 로봇 odom 위치와 짝지어 지도 위치를 맞춘다).
+  // 브라우저는 https 또는 localhost에서만 위치를 알려 준다 → http로 열었으면 서버의 https 주소로 옮긴다
+  var gbtn = document.getElementById("stepmap-gps-btn"), gtxt = document.getElementById("stepmap-gps");
+  var gon = false, gwatch = null, glast = 0, gmsg = "", geo = null, httpsPort = null;
+  try { gon = sessionStorage.getItem("stepmap-gps") === "1"; } catch (e) {}
+  function gpsLabel() {
+    var g = geo || {}, t;
+    if (gmsg) t = gmsg;
+    else if (g.source === "config") t = "위치: 설정값";
+    else if (g.source === "gps") t = "GPS 위치" + (g.heading_ok ? "" : " · 방향 확인 중") + (g.acc != null ? " · ±" + Math.round(g.acc) + " m" : "");
+    else t = gon ? "GPS 기다리는 중…" : "위치 미확인 · 내 위치로 보정";
+    gtxt.textContent = t;
+    gbtn.setAttribute("aria-pressed", gon ? "true" : "false");
+  }
+  function gpsSend(p) {
+    if (Date.now() - glast < 2000) return;
+    glast = Date.now();
+    fetch("api/gps", {method: "POST", headers: {"Content-Type": "application/json"},
+                      body: JSON.stringify({lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy})})
+      .then(function (r) { return r.json(); })
+      .then(function (d) { gmsg = d.ok ? "" : (d.error || "위치 보정 실패"); gpsLabel(); })
+      .catch(function () { gmsg = "위치를 보내지 못함"; gpsLabel(); });
+  }
+  function gpsStart(clicked) {
+    if (!window.isSecureContext) {
+      if (clicked && httpsPort) {
+        location.href = "https://" + location.hostname + ":" + httpsPort + location.pathname + location.hash;
+        return;
+      }
+      gmsg = "위치는 https 또는 localhost 주소에서만";
+      return;
+    }
+    if (!navigator.geolocation) { gmsg = "이 브라우저는 위치 기능 없음"; return; }
+    gmsg = "";
+    gwatch = navigator.geolocation.watchPosition(gpsSend, function (err) {
+      gmsg = err.code === 1 ? "위치 권한이 거부됨" : "위치를 받지 못함";
+      gpsLabel();
+    }, {enableHighAccuracy: true, maximumAge: 1000, timeout: 20000});
+  }
+  function gpsStop() {
+    if (gwatch !== null) navigator.geolocation.clearWatch(gwatch);
+    gwatch = null;
+    gmsg = "";
+  }
+  gbtn.onclick = function () {
+    gon = !gon;
+    try { sessionStorage.setItem("stepmap-gps", gon ? "1" : "0"); } catch (e) {}
+    if (gon) gpsStart(true); else gpsStop();
+    gpsLabel();
+  };
+  if (gon) gpsStart(false);
+  gpsLabel();
   function tick() {
     fetch("api/version", {cache: "no-store"}).then(function (r) { return r.json(); }).then(function (v) {
       last = Date.now();
@@ -108,6 +173,11 @@ LIVE_SCRIPT = """
         return;
       }
       box.classList.remove("off");
+      geo = v.geo || null;
+      httpsPort = v.https_port || null;
+      gpsLabel();
+      // 로봇 마커: 다시 그리지 않고 지금 위치로 옮긴다 (대시보드가 window.stepmapMoveRobot을 열어 둔다)
+      if (v.robot && window.stepmapMoveRobot) window.stepmapMoveRobot(v.robot);
       badge.textContent = "실시간 · 측정 지점 " + v.events + "개";
       when.textContent = hhmmss(new Date());
       // 로봇 카드 배터리: 다시 그리지 않고 바로 바꾼다
@@ -181,7 +251,12 @@ class LiveStore:
         self.cfg = cfg or {}
         self.geo = geo or georef_from_config(self.cfg)
         self.geo_is_fallback = self.geo is None
+        self.geo_source = "none" if self.geo is None else "config"   # "config" | "gps" | "none"(기준점, 위치 미확인)
         self.geo = self.geo or FALLBACK_GEO
+        self.gps: list[dict] = []                 # GPS 위치 + 그때의 odom 위치
+        self.gps_heading_ok = False               # 방위각까지 GPS로 정했는지 (로봇이 MIN_SPREAD_M 이상 움직인 뒤)
+        self.forward_gps = False                  # 복제본(--pull): 받은 위치를 로봇 서버로 넘긴다
+        self.https_port: int | None = None
         self.lock = threading.RLock()
         self.seq = 0
         self.events: dict[str, dict] = {}
@@ -233,6 +308,9 @@ class LiveStore:
             self.traces[item["key"]] = [_norm_trace(r) for r in item["rows"]]
         elif kind == "status":
             self.status.update(item["row"])
+        elif kind == "gps":
+            self.gps.append({k: float(item["row"][k]) if item["row"].get(k) is not None else None
+                             for k in ("t", "lat", "lon", "acc", "x", "y")})
 
     def check(self, item: dict) -> list[str]:
         """받기 전에 형식 검사 (잘못된 항목이 stream에 들어가 내보내기를 깨지 않게)."""
@@ -250,6 +328,13 @@ class LiveStore:
                 return ["trace: key, rows 필요"]
             return validate_foot_traces([_norm_trace(r) for r in item["rows"]], raw=True)
         if kind in ("status", "file"):
+            return []
+        if kind == "gps":
+            r = item.get("row") or {}
+            if not all(isinstance(r.get(c), (int, float)) for c in ("t", "lat", "lon", "x", "y")):
+                return ["gps: t, lat, lon, x, y 숫자 필요"]
+            if not (-90 <= r["lat"] <= 90 and -180 <= r["lon"] <= 180):
+                return ["gps: 위도·경도 범위 밖"]
             return []
         return [f"알 수 없는 type {kind!r}"]
 
@@ -280,6 +365,41 @@ class LiveStore:
                 self.dirty = True
             return self.seq, errors
 
+    def add_gps(self, lat: float, lon: float, acc: float | None) -> str | None:
+        """로봇 서버: 기기 GPS 위치를 지금 로봇 odom 위치(마지막 궤적 점)와 짝지어 저장. 문제가 있으면 이유를 돌려준다."""
+        with self.lock:
+            if not self.traj:
+                return "로봇 위치(odom)가 아직 없습니다"
+            now = time.time()
+            if self.gps and now - self.gps[-1]["t"] < GPS_MIN_GAP_S:
+                return None
+            p = self.traj[-1]
+            row = {"t": round(now, 2), "lat": lat, "lon": lon, "acc": None if acc is None else round(acc, 1),
+                   "x": p["x"], "y": p["y"]}
+        _, errors = self.ingest([{"type": "gps", "row": row}])
+        return errors[0] if errors else None
+
+    def _update_geo(self):
+        """GPS 짝으로 GeoRef를 다시 맞춘다 (config/--geo가 있으면 그대로). 크게 바뀌면 지도를 다시 그리게 한다."""
+        if self.geo_source == "config" or not self.gps:
+            return
+        res = fit_geo(self.gps, self.geo.heading_deg if self.gps_heading_ok else None)
+        if res is None:
+            return
+        new, heading_ok = res
+        heading_ok = heading_ok or self.gps_heading_ok
+        pts = [(0.0, 0.0)] + [(p["x"], p["y"]) for p in self.traj[:1] + self.traj[-1:]] +               [(e["x"], e["y"]) for e in self.events.values() if e.get("x") is not None]
+        if self.geo_source != "gps" or heading_ok != self.gps_heading_ok or shift_m(self.geo, new, pts) > GEO_SHIFT_M:
+            self.geo, self.geo_source, self.gps_heading_ok = new, "gps", heading_ok
+            self.geo_is_fallback = False
+            self._sig = None                     # 위치가 바뀌었으니 대시보드를 다시 그린다
+
+    def robot_latlon(self) -> list[float] | None:
+        with self.lock:
+            if not self.traj:
+                return None
+            return [round(v, 7) for v in self.geo.to_latlon(self.traj[-1]["x"], self.traj[-1]["y"])]
+
     def since(self, seq: int, limit: int = 2000) -> list[dict]:
         with self.lock:
             lo, hi = 0, len(self.items)
@@ -302,6 +422,7 @@ class LiveStore:
 
     # ---- 내보내기 ----
     def _rows(self):
+        self._update_geo()
         off = float(self.meta.get("clock_offset") or 0.0)
         session = self.dir.name
         events = []
@@ -443,7 +564,10 @@ class _Handler(BaseHTTPRequestHandler):
             with s.lock:
                 self._json({"version": s.version, "seq": s.seq, **s.summary, "battery": s.status.get("battery"),
                             "status": s.status, "clock_offset": s.meta.get("clock_offset"),
-                            "geo_fallback": s.geo_is_fallback, "pull": s.pull_state})
+                            "geo_fallback": s.geo_is_fallback, "pull": s.pull_state,
+                            "geo": {"source": s.geo_source, "fixes": len(s.gps), "heading_ok": s.gps_heading_ok,
+                                    "acc": s.gps[-1]["acc"] if s.gps else None},
+                            "https_port": s.https_port, "robot": s.robot_latlon()})
         elif u.path == "/api/since":
             if "now" in q:
                 s.note_remote_clock(float(q["now"][0]))
@@ -508,8 +632,52 @@ class _Handler(BaseHTTPRequestHandler):
             os.replace(tmp, p)
             s.ingest([{"type": "file", "path": rel}])
             self._json({"ok": True})
+        elif u.path == "/api/gps":
+            self._gps(body)
         else:
             self._send(404, b"not found", "text/plain")
+
+
+    def _gps(self, body: bytes):
+        """기기 위치 {lat, lon, acc}. 로봇 서버는 odom과 짝지어 저장, 복제본은 지금 연결된 로봇 서버로 넘긴다."""
+        s = self.store
+        try:
+            d = json.loads(body.decode("utf-8"))
+            lat, lon = float(d["lat"]), float(d["lon"])
+            acc = None if d.get("acc") is None else float(d["acc"])
+        except (ValueError, KeyError, TypeError) as e:
+            self._json({"ok": False, "error": f"JSON: {e}"}, 400)
+            return
+        if s.forward_gps:
+            url = (s.pull_state or {}).get("url")
+            if not url or not s.pull_state.get("ok"):
+                self._json({"ok": False, "error": "로봇 서버와 연결되지 않았습니다"}, 502)
+                return
+            req = urllib.request.Request(f"{url}/api/gps", data=body, headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=4) as r:
+                    self._send(r.status, r.read())
+            except urllib.error.HTTPError as e:
+                self._send(e.code, e.read())
+            except (urllib.error.URLError, OSError) as e:
+                self._json({"ok": False, "error": f"로봇 서버: {e}"}, 502)
+            return
+        err = s.add_gps(lat, lon, acc)
+        self._json({"ok": not err, "error": err}, 409 if err else 200)
+
+
+def _https_context(cert_dir: Path):
+    """자체 서명 인증서(처음 한 번 openssl로 만든다)로 https를 연다. 휴대폰 브라우저 위치 기능용."""
+    import ssl
+    import subprocess
+    cert, key = cert_dir / "stepmap_cert.pem", cert_dir / "stepmap_key.pem"
+    if not cert.is_file() or not key.is_file():
+        cert_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "3650", "-subj", "/CN=stepmap",
+                        "-keyout", str(key), "-out", str(cert)], check=True, capture_output=True)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(str(cert), str(key))
+    return ctx
 
 
 def _exporter(store: LiveStore, stop: threading.Event):
@@ -589,13 +757,16 @@ DEFAULT_CAMERA = "/dev/shm/terrain_live.jpg"   # 로봇: inspect_node.py가 초�
 
 
 def serve(folder: str | Path, port: int = 8060, config: str | Path = "config.yaml", pull: str | None = None,
-          geo: GeoRef | None = None, host: str = "0.0.0.0", camera: str | None = None) -> None:
+          geo: GeoRef | None = None, host: str = "0.0.0.0", camera: str | None = None,
+          https_port: int | None = None) -> None:
     cfg = load_config(config) if Path(config).exists() else {}
     store = LiveStore(folder, cfg, geo)
     store.camera = camera if camera is not None else (None if pull else DEFAULT_CAMERA)
     store.robot_photo = Path(config).resolve().parent / "data" / "robot.png"
+    store.forward_gps = bool(pull)
     if store.geo_is_fallback:
-        print("[live] config.yaml geo 미설정: 지도 위치는 기준점 대비 상대값입니다 (--geo LAT,LON,HEADING)", flush=True)
+        print("[live] config.yaml geo 미설정: 대시보드의 '내 위치로 보정'(기기 GPS)으로 실제 위치를 맞춥니다. "
+              "그 전까지 지도 위치는 기준점 대비 상대값", flush=True)
     _Handler.store = store
     stop = threading.Event()
     threading.Thread(target=_exporter, args=(store, stop), daemon=True).start()
@@ -603,6 +774,15 @@ def serve(folder: str | Path, port: int = 8060, config: str | Path = "config.yam
         threading.Thread(target=_puller, args=(store, pull, stop), daemon=True).start()
     httpd = ThreadingHTTPServer((host, port), _Handler)
     print(f"[live] 세션 {store.dir} (항목 {store.seq}개) → http://{host}:{port}/", flush=True)
+    if https_port:
+        try:
+            httpsd = ThreadingHTTPServer((host, https_port), _Handler)
+            httpsd.socket = _https_context(Path.home() / ".stepmap").wrap_socket(httpsd.socket, server_side=True)
+            threading.Thread(target=httpsd.serve_forever, daemon=True).start()
+            store.https_port = https_port
+            print(f"[live] 휴대폰 위치용 https://{host}:{https_port}/ (자체 서명 인증서: 처음 한 번 '계속' 눌러 열기)", flush=True)
+        except (OSError, ImportError) as e:
+            print(f"[live] https 열기 실패 ({e}): http만 씁니다", file=sys.stderr, flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
