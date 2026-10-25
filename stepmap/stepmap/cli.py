@@ -3,6 +3,8 @@
 Phase A 하위 명령: demo, map, merge, report.
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
