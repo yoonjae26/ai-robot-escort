@@ -405,9 +405,13 @@ def write_dashboard(events_path: str | Path, traj_path: str | Path, out_path: st
     blocks_path = Path(blocks_path) if blocks_path else Path(events_path).parent / "blocks.csv"
     blocks = read_blocks(blocks_path) if blocks_path.is_file() else None
     stepped = count_stepped_blocks(blocks, trace_rows) if blocks is not None or trace_rows else None
-    page = build_html(events, read_trajectory(traj_path), thresholds, photos, meta, traces, report_href, history,
+    traj = read_trajectory(traj_path)
+    page = build_html(events, traj, thresholds, photos, meta, traces, report_href, history,
                       stepped, blocks_payload(blocks, block_size))
     out.write_text(page, encoding="utf-8")
+    if meta.get("vworld_key"):  # VWorld 3D 지도 (대시보드의 '3D 지도' 버튼이 띄운다)
+        from .map3d import MAP3D_NAME, build_map3d_html
+        (out.parent / MAP3D_NAME).write_text(build_map3d_html(events, traj, meta["vworld_key"]), encoding="utf-8")
     return out
 
 
@@ -1582,7 +1586,7 @@ _TEMPLATE = r"""<!doctype html>
   // 일반 지도 / 위성 지도 전환 (VWorld 키가 있을 때). 위성은 VWorld 영상 + 도로·지명 겹침, 바탕 지도 위에 덮는다
   state.satellite = false;
   const satMaps = [];
-  function addSatelliteToggle(map, position) {
+  function addSatelliteToggle(map, position, with3d) {
     if (!VWORLD) return;
     const sat = L.layerGroup([
       L.tileLayer(`${VWORLD}/Satellite/{z}/{y}/{x}.jpeg`, { maxNativeZoom: 19, maxZoom: 22, attribution: VWORLD_ATTR }),
@@ -1601,6 +1605,13 @@ _TEMPLATE = r"""<!doctype html>
         return b;
       };
       const normal = mk("일반 지도", false), satellite = mk("위성 지도", true);
+      if (with3d) {
+        const b3 = L.DomUtil.create("button", "", box);
+        b3.type = "button";
+        b3.textContent = "3D 지도";
+        b3.style.cssText = "border:0;border-left:1px solid #e2e2e2;padding:8px 12px;cursor:pointer;font:inherit;background:transparent;color:#333";
+        L.DomEvent.on(b3, "click", (ev) => { L.DomEvent.stop(ev); open3d(true); });
+      }
       satMaps.push({ map, sat, normal, satellite });
       L.DomEvent.disableClickPropagation(box);
       return box;
@@ -1608,6 +1619,29 @@ _TEMPLATE = r"""<!doctype html>
     ctl.addTo(map);
     setSatellite(state.satellite);
   }
+  // VWorld 3D 지도 (map3d.html, 같은 폴더): 화면 전체에 띄운다. 새로고침(실시간 갱신)되어도 열린 상태를 유지
+  function open3d(on) {
+    let ov = document.getElementById("map3d-overlay");
+    try { sessionStorage.setItem("stepmap-3d", on ? "1" : "0"); } catch (e) {}
+    if (!on) { if (ov) ov.remove(); return; }
+    if (ov) return;
+    ov = document.createElement("div");
+    ov.id = "map3d-overlay";
+    ov.style.cssText = "position:fixed;inset:0;z-index:99999;background:#1f1c1f";
+    const fr = document.createElement("iframe");
+    fr.src = "map3d.html";
+    fr.title = "3D 지도";
+    fr.style.cssText = "border:0;width:100%;height:100%";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "2D 지도로 돌아가기";
+    close.style.cssText = "position:absolute;right:12px;bottom:24px;z-index:2;border:0;border-radius:999px;padding:10px 16px;" +
+                          "font:600 13px/1 inherit;background:#2f2a2f;color:#fff;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3)";
+    close.onclick = () => open3d(false);
+    ov.append(fr, close);
+    document.body.append(ov);
+  }
+  try { if (VWORLD && sessionStorage.getItem("stepmap-3d") === "1") setTimeout(() => open3d(true), 0); } catch (e) {}
   function setSatellite(on) {
     state.satellite = on;
     for (const m of satMaps) {
@@ -1747,7 +1781,7 @@ _TEMPLATE = r"""<!doctype html>
     const gen = ++state.gen;
     const map = L.map("map", { zoomControl: false });
     L.control.zoom({ position: "bottomright" }).addTo(map);  // 왼쪽 위는 로고·필터 카드 자리
-    addSatelliteToggle(map, "bottomright");
+    addSatelliteToggle(map, "bottomright", true);
     state.map = map;
     state.mode = "tiles";
     $("map-attr").append(map.attributionControl.getContainer());  // 화면 가장 아래 오른쪽 구석 (지도를 지우면 같이 지워진다)
