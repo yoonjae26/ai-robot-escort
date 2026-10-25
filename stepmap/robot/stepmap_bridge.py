@@ -186,6 +186,9 @@ class Bridge(Node):
                            "%s 단차 %.1f cm (%.1f m 앞에서 확인)" % ("오르막" if dz > 0 else "내리막", abs(dz) * 100, dist))
 
     def on_timer(self):
+        if self.pose is None and time.time() - self.t_start > 10:
+            self.get_logger().warn("no odometry yet: measurements cannot be placed (is sport mode running? "
+                                   "/utlidar/robot_odom comes from the sport service)", throttle_duration_sec=30.0)
         self.read_inspect()
         try:
             st = json.loads(Path("/dev/shm/auto_recorder.json").read_text())

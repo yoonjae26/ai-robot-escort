@@ -54,9 +54,18 @@ PULL_PERIOD_S = 1.0
 FALLBACK_GEO = GeoRef(33.4860373, 126.4866073, 0.0)
 
 LIVE_SCRIPT = """
-<div id="stepmap-live" style="position:fixed;left:12px;bottom:12px;z-index:100000;
- font:600 12px/1.6 system-ui,sans-serif;background:rgba(255,255,255,.92);border:1px solid #d9d9d9;border-radius:999px;
- padding:2px 12px;color:#333;box-shadow:0 1px 4px rgba(0,0,0,.12)">● 실시간 연결 중…</div>
+<div id="stepmap-live-cam" style="display:none;position:fixed;left:12px;bottom:44px;z-index:100000;width:min(420px,70vw);
+ background:#111;border-radius:10px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.3)">
+ <img id="stepmap-live-img" alt="실시간 카메라" style="display:block;width:100%">
+ <div id="stepmap-live-camtxt" style="position:absolute;left:8px;top:6px;font:600 11px system-ui,sans-serif;color:#fff;
+  text-shadow:0 1px 2px #000">실시간 카메라</div></div>
+<div style="position:fixed;left:12px;bottom:12px;z-index:100000;display:flex;gap:6px;
+ font:600 12px/1.6 system-ui,sans-serif">
+ <div id="stepmap-live" style="background:rgba(255,255,255,.92);border:1px solid #d9d9d9;border-radius:999px;
+  padding:2px 12px;color:#333;box-shadow:0 1px 4px rgba(0,0,0,.12)">● 실시간 연결 중…</div>
+ <button id="stepmap-live-cambtn" type="button" style="font:inherit;cursor:pointer;background:rgba(255,255,255,.92);
+  border:1px solid #d9d9d9;border-radius:999px;padding:2px 12px;color:#333;box-shadow:0 1px 4px rgba(0,0,0,.12)">카메라</button>
+</div>
 <script>
 (function () {
   var badge = document.getElementById("stepmap-live");
@@ -76,9 +85,31 @@ LIVE_SCRIPT = """
   }
   tick();
   setInterval(tick, 2000);
+  // 실시간 카메라: 로봇은 inspect_node가 쓰는 최신 사진, 노트북은 로봇에서 받아 전달한다 (약 3장/초)
+  var box = document.getElementById("stepmap-live-cam"), img = document.getElementById("stepmap-live-img");
+  var txt = document.getElementById("stepmap-live-camtxt"), on = false, busy = false;
+  try { on = sessionStorage.getItem("stepmap-cam") === "1"; } catch (e) {}
+  function show() { box.style.display = on ? "block" : "none"; }
+  document.getElementById("stepmap-live-cambtn").onclick = function () {
+    on = !on; show();
+    try { sessionStorage.setItem("stepmap-cam", on ? "1" : "0"); } catch (e) {}
+  };
+  img.onload = function () { busy = false; txt.textContent = "실시간 카메라 · " + hhmmss(new Date()); };
+  img.onerror = function () { busy = false; txt.textContent = "카메라 없음 (inspect.sh 실행 중인지 확인)"; };
+  setInterval(function () { if (on && !busy) { busy = true; img.src = "camera.jpg?t=" + Date.now(); } }, 330);
+  show();
 })();
 </script>
 """
+
+WAITING_PAGE = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>StepMap 실시간</title></head>
+<body style="margin:0;font:15px/1.6 system-ui,sans-serif;background:#f6f6f4;color:#333">
+<div style="max-width:560px;margin:18vh auto;padding:0 20px;text-align:center">
+<h1 style="font-size:22px">측정 데이터를 기다리는 중</h1>
+<p>로봇에서 첫 이동 궤적이나 측정 지점이 도착하면 대시보드가 자동으로 열립니다.<br>
+오래 걸리면 로봇의 odom(/utlidar/robot_odom)과 stepmap_bridge가 실행 중인지 확인하세요.</p></div>
+""" + LIVE_SCRIPT + "</body></html>"
 
 
 def _norm_event(row: dict) -> dict:
@@ -128,6 +159,7 @@ class LiveStore:
         self.summary = {"events": 0, "danger": 0, "warn": 0}
         self.dirty = False
         self.pull_state: dict = {}                # --pull: 지금 받는 주소와 상태
+        self.camera: str | None = None            # 실시간 카메라 사진 파일 (로봇)
         self._sig = None                      # 마지막으로 그린 측정 지점·발끝 기록·상태
         self._drawn_at = 0.0
         self._replay()
@@ -384,12 +416,32 @@ class _Handler(BaseHTTPRequestHandler):
                 self.end_headers()
             except (FormatError, ValueError) as e:
                 self._send(500, str(e).encode("utf-8"), "text/plain; charset=utf-8")
+        elif u.path == "/camera.jpg":
+            self._camera()
+        elif u.path == "/dashboard.html" and not (s.dir / OUT_DIR / "dashboard.html").is_file():
+            self._send(200, WAITING_PAGE.replace("__VERSION__", "0").encode("utf-8"), "text/html; charset=utf-8")
         elif u.path.startswith("/files/"):
             p = self._safe(s.dir, u.path[len("/files/"):])
             self._file(p) if p else self._send(403, b"forbidden", "text/plain")
         else:
             p = self._safe(s.dir / OUT_DIR, u.path.lstrip("/"))
             self._file(p) if p else self._send(403, b"forbidden", "text/plain")
+
+    def _camera(self):
+        """로봇: --camera 파일(inspect_node의 최신 사진). 노트북(--pull): 지금 연결된 로봇에서 받아 전달."""
+        s = self.store
+        if s.camera and Path(s.camera).is_file():
+            self._send(200, Path(s.camera).read_bytes(), "image/jpeg")
+            return
+        url = (s.pull_state or {}).get("url")
+        if url and s.pull_state.get("ok"):
+            try:
+                with urllib.request.urlopen(f"{url}/camera.jpg", timeout=2) as r:
+                    self._send(200, r.read(), "image/jpeg")
+                return
+            except (urllib.error.URLError, OSError):
+                pass
+        self._send(404, b"no camera", "text/plain")
 
     def do_POST(self):
         s = self.store
@@ -492,10 +544,14 @@ def _puller(store: LiveStore, urls, stop: threading.Event):
         stop.wait(PULL_PERIOD_S)
 
 
+DEFAULT_CAMERA = "/dev/shm/terrain_live.jpg"   # 로봇: inspect_node.py가 초당 여러 번 쓰는 최신 카메라 사진
+
+
 def serve(folder: str | Path, port: int = 8060, config: str | Path = "config.yaml", pull: str | None = None,
-          geo: GeoRef | None = None, host: str = "0.0.0.0") -> None:
+          geo: GeoRef | None = None, host: str = "0.0.0.0", camera: str | None = None) -> None:
     cfg = load_config(config) if Path(config).exists() else {}
     store = LiveStore(folder, cfg, geo)
+    store.camera = camera if camera is not None else (None if pull else DEFAULT_CAMERA)
     if store.geo_is_fallback:
         print("[live] config.yaml geo 미설정: 지도 위치는 기준점 대비 상대값입니다 (--geo LAT,LON,HEADING)", flush=True)
     _Handler.store = store
