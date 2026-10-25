@@ -1,6 +1,6 @@
 """StepMap 명령줄 진입점.
 
-Phase A 하위 명령: demo, map, merge, report.
+Phase A 하위 명령: demo, map, merge, report. 실시간: live.
 """
 
 from __future__ import annotations
@@ -149,6 +149,22 @@ def cmd_map(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_live(args: argparse.Namespace) -> int:
+    from .events import GeoRef
+    from .live import serve
+
+    geo = None
+    if args.geo:
+        try:
+            lat, lon, *rest = (float(v) for v in args.geo.split(","))
+            geo = GeoRef(lat, lon, rest[0] if rest else 0.0)
+        except ValueError:
+            print("stepmap live: --geo는 LAT,LON[,HEADING] 형식", file=sys.stderr)
+            return 1
+    serve(args.dir, args.port, args.config, args.pull, geo, args.host)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="stepmap",
@@ -196,6 +212,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-c", "--config", default="config.yaml",
                    help="판정 기준·merge 거리/시간을 읽을 설정 파일 (기본: config.yaml, 없으면 기본값)")
     p.set_defaults(func=cmd_merge)
+
+    p = sub.add_parser("live", help="실시간 서버: 측정 결과를 받는 즉시 합쳐 대시보드 갱신, 다른 컴퓨터로 복제")
+    p.add_argument("-d", "--dir", required=True, help="세션 폴더 (stream.jsonl, events.csv, live/dashboard.html)")
+    p.add_argument("--port", type=int, default=8060, help="HTTP 포트 (기본: 8060)")
+    p.add_argument("--host", default="0.0.0.0", help="받을 주소 (기본: 모든 주소)")
+    p.add_argument("--pull", metavar="URL", help="원격 live 서버(로봇)에서 끌어오기, 예: http://192.168.123.18:8060")
+    p.add_argument("--geo", metavar="LAT,LON[,HEADING]", help="출발점 위도·경도·odom x축 방위각 (config.yaml geo 대신)")
+    p.add_argument("-c", "--config", default="config.yaml",
+                   help="판정 기준·merge·geo·로봇 정보를 읽을 설정 파일 (기본: config.yaml)")
+    p.set_defaults(func=cmd_live)
 
     return parser
 
