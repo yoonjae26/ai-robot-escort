@@ -558,6 +558,8 @@ _TEMPLATE = r"""<!doctype html>
     --ctl-on: #363236; --ctl-on-text: #FFFFFF; --ctl-shadow: 0 1px 2px rgb(54 50 54 / 0.1), 0 4px 12px rgb(54 50 54 / 0.1);
   }
   :root[data-tiles="topo"] .mapcard[data-map="light"] { --tile-filter: grayscale(1) contrast(0.85) brightness(1.05); --tile-opacity: 0.55; }
+  :root[data-tiles="vworld"] .mapcard[data-map="light"] { --tile-filter: grayscale(1) contrast(0.8) brightness(1.1); --tile-opacity: 0.6; }
+  /* 위성 지도는 타일 칸 밖(sat 칸)에 그려 회색 필터를 받지 않는다 */
   :root[data-tiles="vector"] .mapcard[data-map] { --tile-filter: none; --tile-opacity: 1; }  /* 벡터 지도는 어두운 지도도 스타일 색으로 */
   .mapcard[data-map="dark"] {
     --map-bg: #1F1C1F; --tile-filter: grayscale(1) invert(1) brightness(0.85) contrast(0.9);
@@ -971,9 +973,9 @@ _TEMPLATE = r"""<!doctype html>
   :root[data-theme="dark"] .rc-art::after { background: radial-gradient(closest-side, rgb(0 0 0 / 0.55), rgb(0 0 0 / 0)); }
   .rc-art img, .rc-art svg { position: relative; z-index: 1; display: block; width: 100%; height: 100%; object-fit: contain; object-position: right bottom; }
   .rc-art svg { color: var(--text); }
-  /* 사진: 카드 안쪽 높이의 약 92%, 오른쪽 아래(아래 10px)에 카드 안으로. 위쪽은 ← → 버튼 옆 높이까지 (버튼이 위 레이어,
-     버튼 뒤에는 로봇 몸통 뒤쪽). 폭·오른쪽 여백(16~44px)은 JS(fitRobotPhoto)가 칩 오른쪽 끝 + 12px 안에서 최대로 맞춘다 */
-  .rc-art.photo { right: 44px; bottom: 10px; width: 45%; height: calc((100% - 32px) * 0.92); opacity: 1; }
+  /* 사진: 카드 높이 + 14px로 위(4px)·아래(10px)·오른쪽(8px)으로 살짝 넘친다. ← → 버튼이 위 레이어.
+     폭은 JS(fitRobotPhoto)가 칩 오른쪽 끝 + 4px부터 카드 오른쪽 넘침까지 안에서 최대로 맞춘다 */
+  .rc-art.photo { right: -8px; bottom: -10px; width: 52%; height: calc(100% + 14px); opacity: 1; }
   .rc-art.photo::after { left: auto; right: calc(var(--shot-w, 100%) * 0.15); bottom: -5px; width: calc(var(--shot-w, 100%) * 0.7); height: 10px;
                          background: rgb(54 50 54 / 0.12); filter: blur(8px); }  /* 발밑 옅은 타원 그림자: 사진 폭의 70% */
   .rc-art[hidden], .rc-art img[hidden], .rc-art svg[hidden] { display: none; }
@@ -1571,10 +1573,11 @@ _TEMPLATE = r"""<!doctype html>
     { name: "topo", url: "__TILE_FALLBACK_URL__", sub: "__TILE_FALLBACK_SUBDOMAINS__", maxNative: __TILE_FALLBACK_MAX_NATIVE_ZOOM__,
       attribution: '__TILE_FALLBACK_ATTRIBUTION__' },
   ];
-  // VWorld(국토교통부) 키가 있으면 한국 일반 지도를 맨 앞에 둔다 (안 되면 아래 제공처로 넘어간다)
+  // VWorld(국토교통부) 키가 있으면 벡터 지도 다음에 한국 일반 지도를 둔다 (회색 필터로 디자인 색에 맞춤).
+  // 위성 지도·3D 지도는 VWorld만 쓴다
   const VWORLD = DATA.vworld_key ? `https://api.vworld.kr/req/wmts/1.0.0/${encodeURIComponent(DATA.vworld_key)}` : "";
   const VWORLD_ATTR = '&copy; <a href="https://www.vworld.kr">VWorld</a> (국토교통부)';
-  if (VWORLD) TILES.unshift({ name: "vworld", url: `${VWORLD}/Base/{z}/{y}/{x}.png`, sub: "", maxNative: 19, attribution: VWORLD_ATTR });
+  if (VWORLD) TILES.splice(1, 0, { name: "vworld", url: `${VWORLD}/Base/{z}/{y}/{x}.png`, sub: "", maxNative: 19, attribution: VWORLD_ATTR });
   state.tileIdx = 0;          // 지금 쓰는 제공처 (지도 세 개가 함께 쓴다)
   state.tileChecks = {};      // 제공처별 확인 결과 (Promise<boolean>)
   root.dataset.tiles = TILES[0].name;
@@ -1588,14 +1591,15 @@ _TEMPLATE = r"""<!doctype html>
   const satMaps = [];
   function addSatelliteToggle(map, position, with3d) {
     if (!VWORLD) return;
+    if (!map.getPane("sat")) map.createPane("sat").style.zIndex = 250;  // 바탕 지도(200) 위, 표시(400) 아래
     const sat = L.layerGroup([
-      L.tileLayer(`${VWORLD}/Satellite/{z}/{y}/{x}.jpeg`, { maxNativeZoom: 19, maxZoom: 22, attribution: VWORLD_ATTR }),
-      L.tileLayer(`${VWORLD}/Hybrid/{z}/{y}/{x}.png`, { maxNativeZoom: 19, maxZoom: 22 }),
+      L.tileLayer(`${VWORLD}/Satellite/{z}/{y}/{x}.jpeg`, { pane: "sat", maxNativeZoom: 19, maxZoom: 22, attribution: VWORLD_ATTR }),
+      L.tileLayer(`${VWORLD}/Hybrid/{z}/{y}/{x}.png`, { pane: "sat", maxNativeZoom: 19, maxZoom: 22 }),
     ]);
     const ctl = L.control({ position });
     ctl.onAdd = () => {
       const box = L.DomUtil.create("div", "leaflet-bar maptype");
-      box.style.cssText = "display:flex;overflow:hidden;border-radius:999px;background:#fff;font:600 12px/1 inherit";
+      box.style.cssText = "display:flex;overflow:hidden;border-radius:999px;background:var(--ctl-bg,#fff);font:600 12px/1 inherit";
       const mk = (label, on) => {
         const b = L.DomUtil.create("button", "", box);
         b.type = "button";
@@ -2558,12 +2562,9 @@ _TEMPLATE = r"""<!doctype html>
         const box = card.getBoundingClientRect();
         const chipRight = Math.max(0, ...[...card.querySelectorAll(".rc-dl dd")].filter((d) => !d.hidden).map((d) => d.getBoundingClientRect().right - box.left));
         art.style.height = "";
-        const want = art.clientHeight * img.naturalWidth / img.naturalHeight;  // 높이 92%일 때 사진 폭
-        const room = box.width - (chipRight + 13);                             // 칩 오른쪽 끝 + 12px부터 카드 오른쪽 끝까지
-        // 오른쪽 여백: 자리가 남으면 왼쪽으로(최대 44px), 모자라면 16px까지 줄여 사진을 최대로 (머리는 버튼 왼쪽에 오게)
-        const R = Math.max(16, Math.min(44, room - want));
-        const w = Math.max(0, Math.min(want, room - R));
-        art.style.right = `${R}px`;
+        const want = art.clientHeight * img.naturalWidth / img.naturalHeight;  // 카드 높이 + 14px일 때 사진 폭
+        const room = box.width - (chipRight + 4) + 8;                          // 칩 오른쪽 끝 + 4px부터 오른쪽 넘침(8px)까지
+        const w = Math.max(0, Math.min(want, room));
         art.style.width = `${w}px`;
         art.style.setProperty("--shot-w", `${w}px`);
       };

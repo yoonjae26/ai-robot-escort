@@ -54,44 +54,80 @@ PULL_PERIOD_S = 1.0
 # 실제 지도 위치가 필요하면 config.yaml geo 또는 --geo LAT,LON,HEADING
 FALLBACK_GEO = GeoRef(33.4860373, 126.4866073, 0.0)
 
+def _latest(events: list[dict]) -> str | None:
+    """새 측정이 들어왔을 때 화면에 띄울 지점: 가장 최근의 위험·주의 지점 (없으면 가장 최근 지점)."""
+    pick = [e for e in events if e["level"] in ("danger", "warn")] or events
+    return max(pick, key=lambda e: e["t"])["id"] if pick else None
+
+
 LIVE_SCRIPT = """
-<div id="stepmap-live-cam" style="display:none;position:fixed;right:12px;top:108px;z-index:100000;width:min(420px,70vw);
- background:#111;border-radius:10px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.3)">
- <img id="stepmap-live-img" alt="실시간 카메라" style="display:block;width:100%">
- <div id="stepmap-live-camtxt" style="position:absolute;left:8px;top:6px;font:600 11px system-ui,sans-serif;color:#fff;
-  text-shadow:0 1px 2px #000">실시간 카메라</div></div>
-<div style="position:fixed;right:12px;top:72px;z-index:100000;display:flex;gap:6px;
- font:600 12px/1.6 system-ui,sans-serif">
- <div id="stepmap-live" style="background:rgba(255,255,255,.92);border:1px solid #d9d9d9;border-radius:999px;
-  padding:2px 12px;color:#333;box-shadow:0 1px 4px rgba(0,0,0,.12)">● 실시간 연결 중…</div>
- <button id="stepmap-live-cambtn" type="button" style="font:inherit;cursor:pointer;background:rgba(255,255,255,.92);
-  border:1px solid #d9d9d9;border-radius:999px;padding:2px 12px;color:#333;box-shadow:0 1px 4px rgba(0,0,0,.12)">카메라</button>
+<style>
+  .sm-live { position: fixed; right: 16px; top: 14px; z-index: 100000; display: flex; gap: 8px; align-items: center;
+             font: 600 13px/1 "Pretendard Variable", Pretendard, "Malgun Gothic", system-ui, sans-serif; }
+  .sm-live .pill { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 16px; border: 1px solid rgb(255 255 255 / 0.6);
+                   border-radius: 999px; background: rgb(255 255 255 / 0.78); color: #363236; box-shadow: 0 4px 16px rgb(54 50 54 / 0.1);
+                   -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); white-space: nowrap; }
+  .sm-live .dot { width: 8px; height: 8px; border-radius: 50%; background: #A5D48C; box-shadow: 0 0 0 4px rgb(165 212 140 / 0.3); }
+  .sm-live .off .dot { background: #EF6461; box-shadow: 0 0 0 4px rgb(239 100 97 / 0.25); }
+  .sm-live .muted { color: #75707A; font-weight: 500; }
+  .sm-live button.pill { cursor: pointer; font: inherit; }
+  .sm-live button.pill[aria-pressed="true"] { background: #363236; color: #fff; }
+  .sm-live svg { width: 16px; height: 16px; }
+  .sm-cam { display: none; position: fixed; right: 16px; top: 68px; z-index: 100000; width: min(420px, 70vw); overflow: hidden;
+            border-radius: 18px; background: #1F1C1F; box-shadow: 0 4px 16px rgb(54 50 54 / 0.2); }
+  .sm-cam img { display: block; width: 100%; }
+  .sm-cam span { position: absolute; left: 10px; top: 8px; padding: 4px 10px; border-radius: 999px; background: rgb(31 28 31 / 0.6);
+                 color: #fff; font: 600 11px/1.2 "Pretendard Variable", "Malgun Gothic", system-ui, sans-serif; }
+  @media (max-width: 1100px) { .sm-live { top: 68px; } .sm-cam { top: 122px; } .sm-live .muted { display: none; } }
+</style>
+<div class="sm-cam" id="stepmap-live-cam"><img id="stepmap-live-img" alt="실시간 카메라"><span id="stepmap-live-camtxt">실시간 카메라</span></div>
+<div class="sm-live">
+ <div class="pill" id="stepmap-live-box"><i class="dot"></i><span id="stepmap-live">실시간 연결 중…</span><span class="muted" id="stepmap-live-t"></span></div>
+ <button class="pill" id="stepmap-live-cambtn" type="button" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+  stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>카메라</button>
 </div>
 <script>
 (function () {
-  var badge = document.getElementById("stepmap-live");
-  var loaded = __VERSION__, last = Date.now();
+  var box = document.getElementById("stepmap-live-box"), badge = document.getElementById("stepmap-live");
+  var when = document.getElementById("stepmap-live-t");
+  var loaded = __VERSION__, last = Date.now(), seen = null;
   function hhmmss(d) { return d.toTimeString().slice(0, 8); }
+  // 새 측정 지점이 들어와 다시 불러올 때: 지점을 고르지 않은 상태면 가장 최근의 위험·주의 지점을 연다
+  try {
+    var want = sessionStorage.getItem("stepmap-open");
+    sessionStorage.removeItem("stepmap-open");
+    if (want && /^#?(home)?[/]?$/.test(location.hash)) location.hash = "#home/" + want;
+  } catch (e) {}
   function tick() {
     fetch("api/version", {cache: "no-store"}).then(function (r) { return r.json(); }).then(function (v) {
       last = Date.now();
-      if (v.version > loaded) { location.reload(); return; }
-      badge.style.color = "#1e7b34";
-      badge.textContent = "● 실시간 · 측정 지점 " + v.events + "개 (위험 " + v.danger + " · 주의 " + v.warn + ")"
-        + (v.battery != null ? " · 배터리 " + v.battery + "%" : "") + " · " + hhmmss(new Date());
+      if (seen === null) seen = v.latest;
+      if (v.version > loaded) {
+        if (v.latest && v.latest !== seen) { try { sessionStorage.setItem("stepmap-open", v.latest); } catch (e) {} }
+        location.reload();
+        return;
+      }
+      box.classList.remove("off");
+      badge.textContent = "실시간 · 측정 지점 " + v.events + "개";
+      when.textContent = hhmmss(new Date());
+      // 로봇 카드 배터리: 다시 그리지 않고 바로 바꾼다
+      var bat = document.getElementById("rc-battery"), batK = document.getElementById("rc-battery-k");
+      if (bat && v.battery != null) { bat.textContent = v.battery + "%"; bat.hidden = false; if (batK) batK.hidden = false; }
     }).catch(function () {
-      badge.style.color = "#b42318";
-      badge.textContent = "● 연결 끊김 · 마지막 수신 " + hhmmss(new Date(last));
+      box.classList.add("off");
+      badge.textContent = "연결 끊김";
+      when.textContent = "마지막 수신 " + hhmmss(new Date(last));
     });
   }
   tick();
   setInterval(tick, 2000);
   // 실시간 카메라: 로봇은 inspect_node가 쓰는 최신 사진, 노트북은 로봇에서 받아 전달한다 (약 3장/초)
-  var box = document.getElementById("stepmap-live-cam"), img = document.getElementById("stepmap-live-img");
+  var cam = document.getElementById("stepmap-live-cam"), img = document.getElementById("stepmap-live-img");
+  var btn = document.getElementById("stepmap-live-cambtn");
   var txt = document.getElementById("stepmap-live-camtxt"), on = false, busy = false;
   try { on = sessionStorage.getItem("stepmap-cam") === "1"; } catch (e) {}
-  function show() { box.style.display = on ? "block" : "none"; }
-  document.getElementById("stepmap-live-cambtn").onclick = function () {
+  function show() { cam.style.display = on ? "block" : "none"; btn.setAttribute("aria-pressed", on ? "true" : "false"); }
+  btn.onclick = function () {
     on = !on; show();
     try { sessionStorage.setItem("stepmap-cam", on ? "1" : "0"); } catch (e) {}
   };
@@ -158,7 +194,7 @@ class LiveStore:
             self.meta.update(json.loads((self.dir / META).read_text(encoding="utf-8")))
         self.version = 0                      # 내보낸 결과가 바뀔 때마다 증가 (대시보드 새로고침 기준)
         self.robot_photo: Path | None = None  # 로봇 카드 사진 (serve가 config 옆 data/robot.png를 넣는다)
-        self.summary = {"events": 0, "danger": 0, "warn": 0}
+        self.summary = {"events": 0, "danger": 0, "warn": 0, "latest": None}
         self.dirty = False
         self.pull_state: dict = {}                # --pull: 지금 받는 주소와 상태
         self.camera: str | None = None            # 실시간 카메라 사진 파일 (로봇)
@@ -317,7 +353,7 @@ class LiveStore:
         elif trace_path.exists():
             trace_path.unlink()
         out = self.dir / OUT_DIR
-        sig = json.dumps([events, linked, status.get("battery")], sort_keys=True, default=str)
+        sig = json.dumps([events, linked], sort_keys=True, default=str)
         stale = time.time() - self._drawn_at > TRAJ_REFRESH_S
         if not force and sig == self._sig and not stale:
             return False
@@ -337,7 +373,7 @@ class LiveStore:
                 os.replace(tmp, dash)
         with self.lock:
             self.summary = {"events": len(events), "danger": sum(e["level"] == "danger" for e in events),
-                            "warn": sum(e["level"] == "warn" for e in events)}
+                            "warn": sum(e["level"] == "warn" for e in events), "latest": _latest(events)}
         return True
 
     def report(self) -> Path:
