@@ -179,3 +179,20 @@ def test_camera_mjpeg_stream(tmp_path, monkeypatch):
     finally:
         httpd.shutdown()
     assert body.startswith(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 10\r\n\r\n\xff\xd8frame1\xff\xd9\r\n")
+
+
+def test_camera_info(tmp_path):
+    cam = tmp_path / "live.jpg"
+    cam.write_bytes(b"\xff\xd8x\xff\xd9")
+    (tmp_path / "live.json").write_text(json.dumps({"written": time.time(), "fps": 15.0, "latency_ms": 80.0}))
+    store = live.LiveStore(tmp_path / "s", {})
+    store.camera = str(cam)
+    live._Handler.store = store
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), live._Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/api/camera", timeout=5) as r:
+            d = json.loads(r.read())
+    finally:
+        httpd.shutdown()
+    assert d["fps"] == 15.0 and d["latency_ms"] == 80.0 and 0 <= d["age_s"] < 5

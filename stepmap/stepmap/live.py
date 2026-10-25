@@ -84,7 +84,9 @@ LIVE_SCRIPT = """
   .sm-live svg { width: 16px; height: 16px; }
   .sm-cam { display: none; position: fixed; right: 16px; top: 68px; z-index: 100000; width: min(420px, 70vw); overflow: hidden;
             border-radius: 18px; background: #1F1C1F; box-shadow: 0 4px 16px rgb(54 50 54 / 0.2); }
-  .sm-cam img { display: block; width: 100%; }
+  .sm-cam img { display: block; width: 100%; cursor: zoom-in; }
+  .sm-cam.big { width: min(960px, calc(100vw - 32px)); }
+  .sm-cam.big img { cursor: zoom-out; }
   .sm-cam span { position: absolute; left: 10px; top: 8px; padding: 4px 10px; border-radius: 999px; background: rgb(31 28 31 / 0.6);
                  color: #fff; font: 600 11px/1.2 "Pretendard Variable", "Malgun Gothic", system-ui, sans-serif; }
   @media (max-width: 1100px) { .sm-live { top: 68px; } .sm-cam { top: 122px; } .sm-live .muted { display: none; } }
@@ -211,6 +213,17 @@ LIVE_SCRIPT = """
   }
   function camClose() { streaming = false; img.removeAttribute("src"); }
   img.onload = function () { txt.textContent = "실시간 카메라"; };
+  img.onclick = function () { cam.classList.toggle("big"); };   // 누르면 크게 / 다시 누르면 작게
+  // 카메라 상태 (1초마다): 로봇 카메라 fps, 촬영 → 사진 지연, 사진이 멈췄는지
+  setInterval(function () {
+    if (!on) return;
+    fetch("api/camera", {cache: "no-store"}).then(function (r) { return r.json(); }).then(function (c) {
+      if (c.error) return;
+      if (c.age_s != null && c.age_s > 3) { txt.textContent = "카메라 멈춤 · " + Math.round(c.age_s) + "초 전 사진"; return; }
+      txt.textContent = "실시간 카메라 · " + Math.round(c.fps || 0) + " fps"
+        + (c.latency_ms != null ? " · 지연 " + Math.round(c.latency_ms) + " ms" : "");
+    }).catch(function () {});
+  }, 1000);
   img.onerror = function () {
     streaming = false;
     txt.textContent = "카메라 없음 (inspect.sh 실행 중인지 확인) · 다시 연결 중";
@@ -599,6 +612,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._camera()
         elif u.path == "/camera.mjpg":
             self._camera_stream()
+        elif u.path == "/api/camera":
+            self._camera_info()
         elif u.path == "/dashboard.html" and not (s.dir / OUT_DIR / "dashboard.html").is_file():
             self._send(200, WAITING_PAGE.replace("__VERSION__", "0").encode("utf-8"), "text/html; charset=utf-8")
         elif u.path.startswith("/files/"):
@@ -623,6 +638,29 @@ class _Handler(BaseHTTPRequestHandler):
             except (urllib.error.URLError, OSError):
                 pass
         self._send(404, b"no camera", "text/plain")
+
+    def _camera_info(self):
+        """카메라 상태: 로봇은 surface_seg_node가 사진과 함께 쓰는 <사진>.json (fps, 촬영→사진 지연),
+        노트북은 로봇에 물어 그대로 전달한다. age_s = 마지막 사진이 몇 초 전인지 (멈춤 확인)."""
+        s = self.store
+        if s.camera:
+            meta = Path(s.camera).with_suffix(".json")
+            try:
+                d = json.loads(meta.read_text(encoding="utf-8"))
+                d["age_s"] = round(time.time() - float(d.get("written") or 0), 2)
+                self._json(d)
+            except (OSError, ValueError):
+                self._json({"error": "no camera info"}, 404)
+            return
+        url = (s.pull_state or {}).get("url")
+        if url and s.pull_state.get("ok"):
+            try:
+                with urllib.request.urlopen(f"{url}/api/camera", timeout=2) as r:
+                    self._send(200, r.read())
+                return
+            except (urllib.error.URLError, OSError):
+                pass
+        self._json({"error": "no camera info"}, 404)
 
     def _camera_stream(self):
         """실시간 카메라 연속 전송 (MJPEG). 로봇: 카메라 사진 파일이 바뀔 때마다 바로 보낸다 (사진마다 요청하는 것보다
