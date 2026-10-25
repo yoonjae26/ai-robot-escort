@@ -20,7 +20,7 @@
 
 시계: Jetson은 RTC 배터리가 없어 인터넷이 없으면 1970년부터 다시 센다. 로봇 쪽 시각이 CLOCK_VALID보다 작으면,
 노트북이 /api/since?now=<노트북 시각>으로 처음 연결될 때 차이(clock_offset)를 기록하고, CSV·대시보드에는
-보정한 시각을 쓴다 (stream에는 원래 값 그대로).
+보정한 시각을 쓴다 (stream에는 원래 값 그대로). 복제본(--pull)은 로봇이 알려 주는 같은 보정값을 쓴다.
 """
 from __future__ import annotations
 
@@ -372,7 +372,7 @@ class _Handler(BaseHTTPRequestHandler):
             if "now" in q:
                 s.note_remote_clock(float(q["now"][0]))
             items = s.since(int(q.get("seq", ["0"])[0]))
-            self._json({"items": items, "last": s.seq})
+            self._json({"items": items, "last": s.seq, "clock_offset": s.meta.get("clock_offset") or 0.0})
         elif u.path == "/report":
             try:
                 s.report()
@@ -437,6 +437,12 @@ def _puller(store: LiveStore, url: str, stop: threading.Event):
             with urllib.request.urlopen(f"{url}/api/since?{q}", timeout=5) as r:
                 data = json.loads(r.read().decode("utf-8"))
             items = data["items"]
+            off = float(data.get("clock_offset") or 0.0)     # 복제본은 로봇의 시계 보정값을 그대로 쓴다
+            if off != store.meta.get("clock_offset"):
+                with store.lock:
+                    store.meta["clock_offset"] = off
+                    store._save_meta()
+                    store.dirty = True
             for it in items:
                 if it["type"] == "file":            # 사진: 먼저 파일을 받아 둔다
                     dst = store.dir / it["path"]
