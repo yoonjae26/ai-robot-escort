@@ -47,6 +47,8 @@ stepmap live -d sessions/20261026_yeondong_A --pull http://192.168.123.18:8060 -
 ```
 노트북 대시보드: `http://localhost:8060/`. 신고서: `http://localhost:8060/report` (geo 필요).
 
+케이블 없이 받으려면 `--pull`에 주소를 여러 개 준다 (끊기면 다음 주소로 자동 전환). 경로와 시험 방법: [network.md](network.md).
+
 ## 측정 항목 대응
 
 | 측정 노드 | StepMap kind | value | 위치 | 비고 |

@@ -138,3 +138,26 @@ def test_http_ingest_and_pull_replication(split_dir, tmp_path):
             assert b"stepmap-live" in r.read()
     finally:
         httpd.shutdown()
+
+
+def test_pull_fails_over_to_next_address(split_dir, tmp_path):
+    robot = live.LiveStore(tmp_path / "robot", {}, GeoRef(33.4860373, 126.4866073, 0.0))
+    robot.ingest(items_from_split(split_dir))
+    live._Handler.store = robot
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), live._Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    good = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        laptop = live.LiveStore(tmp_path / "laptop", {}, GeoRef(33.4860373, 126.4866073, 0.0))
+        stop = threading.Event()
+        dead = "http://127.0.0.1:9"                             # 닿지 않는 첫 주소 (예: 케이블을 뺀 유선 LAN)
+        threading.Thread(target=live._puller, args=(laptop, f"{dead},{good}", stop), daemon=True).start()
+        for _ in range(200):
+            if laptop.meta.get("pull_seq") == robot.seq:
+                break
+            time.sleep(0.05)
+        stop.set()
+        assert laptop.meta["pull_seq"] == robot.seq
+        assert laptop.pull_state["url"] == good and laptop.pull_state["ok"]
+    finally:
+        httpd.shutdown()

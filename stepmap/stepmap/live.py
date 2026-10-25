@@ -4,6 +4,8 @@
   stepmap live -d sessions/<세션> --port 8060
   # 노트북: 로봇 서버에서 끌어와(pull) 같은 대시보드를 띄운다. 네트워크가 끊겨도 다시 연결되면 빠진 것부터 이어받는다
   stepmap live -d sessions/<세션> --port 8060 --pull http://<로봇 주소>:8060
+  # 경로가 여럿이면 쉼표로: 끊기면 다음 주소로 자동 전환 (유선 → Go2 WiFi 경유 → 핫스팟 → Tailscale)
+  stepmap live -d sessions/<세션> --pull http://192.168.123.18:8060,http://100.65.117.65:8060
 
 저장: 받은 항목은 모두 순번(seq)을 붙여 <세션>/stream.jsonl에 한 줄씩 추가하고 디스크에 바로 쓴다 (fsync).
 서버를 다시 켜면 stream.jsonl을 다시 읽어 그대로 복원한다. CSV(events·trajectory·foot_traces)는 stream에서
@@ -125,6 +127,7 @@ class LiveStore:
         self.version = 0                      # 내보낸 결과가 바뀔 때마다 증가 (대시보드 새로고침 기준)
         self.summary = {"events": 0, "danger": 0, "warn": 0}
         self.dirty = False
+        self.pull_state: dict = {}                # --pull: 지금 받는 주소와 상태
         self._sig = None                      # 마지막으로 그린 측정 지점·발끝 기록·상태
         self._drawn_at = 0.0
         self._replay()
@@ -367,7 +370,7 @@ class _Handler(BaseHTTPRequestHandler):
             with s.lock:
                 self._json({"version": s.version, "seq": s.seq, **s.summary, "battery": s.status.get("battery"),
                             "status": s.status, "clock_offset": s.meta.get("clock_offset"),
-                            "geo_fallback": s.geo_is_fallback})
+                            "geo_fallback": s.geo_is_fallback, "pull": s.pull_state})
         elif u.path == "/api/since":
             if "now" in q:
                 s.note_remote_clock(float(q["now"][0]))
@@ -426,47 +429,66 @@ def _exporter(store: LiveStore, stop: threading.Event):
         stop.wait(EXPORT_MIN_S)
 
 
-def _puller(store: LiveStore, url: str, stop: threading.Event):
-    """원격(로봇) 서버에서 새 항목을 끌어온다. 끊기면 기다렸다가 마지막으로 받은 seq 다음부터 다시 받는다."""
-    url = url.rstrip("/")
-    connected = None
+def _pull_once(store: LiveStore, url: str) -> int:
+    """url에서 새 항목을 한 번 받아 저장한다. 받은 항목 수를 돌려준다 (실패하면 예외)."""
+    last = int(store.meta.get("pull_seq") or 0)
+    q = urllib.parse.urlencode({"seq": last, "now": f"{time.time():.3f}"})
+    with urllib.request.urlopen(f"{url}/api/since?{q}", timeout=4) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    items = data["items"]
+    off = float(data.get("clock_offset") or 0.0)     # 복제본은 로봇의 시계 보정값을 그대로 쓴다
+    if off != store.meta.get("clock_offset"):
+        with store.lock:
+            store.meta["clock_offset"] = off
+            store._save_meta()
+            store.dirty = True
+    for it in items:
+        if it["type"] == "file":                    # 사진: 먼저 파일을 받아 둔다
+            dst = store.dir / it["path"]
+            if not dst.exists():
+                with urllib.request.urlopen(f"{url}/files/{urllib.parse.quote(it['path'])}", timeout=10) as r:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = dst.with_name(dst.name + ".part")
+                    with open(tmp, "wb") as f:
+                        shutil.copyfileobj(r, f)
+                    os.replace(tmp, dst)
+    if items:
+        store.ingest(items, keep_src_seq=True)
+        with store.lock:
+            store.meta["pull_seq"] = items[-1]["seq"]
+            store._save_meta()
+    return len(items)
+
+
+def _puller(store: LiveStore, urls, stop: threading.Event):
+    """원격(로봇) 서버에서 새 항목을 끌어온다. 끊기면 마지막으로 받은 seq 다음부터 다시 받는다.
+
+    urls: 같은 로봇에 닿는 주소 여러 개 (쉼표로 구분한 문자열 또는 목록). 예: 유선 LAN, Go2 WiFi 경유,
+    휴대폰 핫스팟, Tailscale. 지금 주소가 끊기면 다음 주소를 차례로 시도하고, 닿는 주소에 머문다.
+    """
+    if isinstance(urls, str):
+        urls = [u for u in urls.split(",") if u.strip()]
+    urls = [u.strip().rstrip("/") for u in urls]
+    i, connected = 0, None
     while not stop.is_set():
+        url = urls[i]
         try:
-            last = int(store.meta.get("pull_seq") or 0)
-            q = urllib.parse.urlencode({"seq": last, "now": f"{time.time():.3f}"})
-            with urllib.request.urlopen(f"{url}/api/since?{q}", timeout=5) as r:
-                data = json.loads(r.read().decode("utf-8"))
-            items = data["items"]
-            off = float(data.get("clock_offset") or 0.0)     # 복제본은 로봇의 시계 보정값을 그대로 쓴다
-            if off != store.meta.get("clock_offset"):
-                with store.lock:
-                    store.meta["clock_offset"] = off
-                    store._save_meta()
-                    store.dirty = True
-            for it in items:
-                if it["type"] == "file":            # 사진: 먼저 파일을 받아 둔다
-                    dst = store.dir / it["path"]
-                    if not dst.exists():
-                        with urllib.request.urlopen(f"{url}/files/{urllib.parse.quote(it['path'])}", timeout=10) as r:
-                            dst.parent.mkdir(parents=True, exist_ok=True)
-                            tmp = dst.with_name(dst.name + ".part")
-                            with open(tmp, "wb") as f:
-                                shutil.copyfileobj(r, f)
-                            os.replace(tmp, dst)
-            if items:
-                store.ingest(items, keep_src_seq=True)
-                with store.lock:
-                    store.meta["pull_seq"] = items[-1]["seq"]
-                    store._save_meta()
-            if connected is not True:
+            n = _pull_once(store, url)
+            store.pull_state = {"url": url, "ok": True, "t": time.time()}
+            if connected != url:
                 print(f"[live] {url} 연결됨 (받은 seq {store.meta.get('pull_seq')})", flush=True)
-                connected = True
-            if items and len(items) >= 2000:
+                connected = url
+            if n >= 2000:
                 continue                             # 밀린 것이 더 있으면 바로 다음 묶음
         except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
             if connected is not False:
-                print(f"[live] {url} 연결 끊김 ({e}); 다시 연결되면 이어받음", flush=True)
-                connected = False
+                print(f"[live] {url} 연결 끊김 ({e}); 다른 주소/재연결 시 이어받음", flush=True)
+            store.pull_state = {"url": url, "ok": False, "t": time.time()}
+            connected = False
+            if len(urls) > 1:
+                i = (i + 1) % len(urls)
+                if i != 0:
+                    continue                         # 다음 주소를 바로 시도, 한 바퀴 돌면 잠시 쉰다
         stop.wait(PULL_PERIOD_S)
 
 
