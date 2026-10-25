@@ -6,6 +6,8 @@
 #   stepmap live -d sessions/<SESSION> --pull http://192.168.123.18:8060   (Tailscale: http://100.65.117.65:8060)
 SESSION=${1:-$(date +%Y%m%d_%H%M%S)}
 source ~/terrain_dataset/env.sh >/dev/null 2>&1
+# VWorld map key (Korean base map / satellite) from a file outside the repo, if present
+[ -f ~/stepmap_live/vworld_key ] && export STEPMAP_VWORLD_KEY=$(cat ~/stepmap_live/vworld_key)
 D=$HOME/stepmap_sessions/$SESSION
 mkdir -p "$D"
 cd ~/stepmap_live/stepmap || exit 1
