@@ -161,3 +161,21 @@ def test_pull_fails_over_to_next_address(split_dir, tmp_path):
         assert laptop.pull_state["url"] == good and laptop.pull_state["ok"]
     finally:
         httpd.shutdown()
+
+
+def test_camera_mjpeg_stream(tmp_path, monkeypatch):
+    cam = tmp_path / "live.jpg"
+    cam.write_bytes(b"\xff\xd8frame1\xff\xd9")
+    store = live.LiveStore(tmp_path / "s", {})
+    store.camera = str(cam)
+    monkeypatch.setattr(live, "CAMERA_IDLE_S", 1.0)
+    live._Handler.store = store
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), live._Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/camera.mjpg", timeout=5) as r:
+            assert r.headers["Content-Type"].startswith("multipart/x-mixed-replace")
+            body = r.read()                      # 새 사진이 없으면 CAMERA_IDLE_S 뒤 서버가 닫는다
+    finally:
+        httpd.shutdown()
+    assert body.startswith(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 10\r\n\r\n\xff\xd8frame1\xff\xd9\r\n")

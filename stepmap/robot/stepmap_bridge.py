@@ -12,6 +12,9 @@ Sources (all optional; whatever is running is used):
       step   each confirmed step (>= confirm_n views): |dz| [cm] at robot + step distance ahead. Seeing the same step
              again (same 0.5 m cell) updates it, keeping the closest view.
   logs/inspect/<session>/state.json (inspect_node.py): sunken / raised tiles and holes -> step [cm] with the snapshot.
+Photos: camera steps and slopes >= slope_photo_deg get the latest camera picture (photo_src, written by inspect_node
+  several times a second, the coloured segmentation view) taken when the event is sent, if it is fresh (< 2 s).
+  The camera looks ahead at the measured spot, so the dashboard shows what the robot saw there.
   /utlidar/robot_odom: trajectory (every 0.5 s when moving) and the robot pose for placing measurements.
   /dev/shm/auto_recorder.json: battery for the dashboard robot card.
 Camera results are placed on the ground where the problem is (StepMap phase_b_checklist 3), not at the robot.
@@ -116,6 +119,8 @@ class Bridge(Node):
         self.slope_every = P("slope_every_m", 2.0).value
         self.inspect_dir = Path(P("inspect_dir", str(HOME / "terrain_dataset" / "logs" / "inspect")).value)
         self.inspect_session = P("inspect_session", "").value   # empty: the newest one written after the bridge start
+        self.photo_src = Path(P("photo_src", "/dev/shm/terrain_live.jpg").value)
+        self.slope_photo_deg = P("slope_photo_deg", 4.76).value  # StepMap slope warn threshold (config.yaml)
         self.out = Outbox(spool, server, self.get_logger())
         self.pose = None                                         # (x, y, yaw)
         self.last_traj = (0.0, None)
@@ -142,6 +147,17 @@ class Bridge(Node):
                "kind": kind, "value": round(value, 2), "unit": unit, "source": "camera", "leg": "",
                "confidence": round(min(1.0, max(0.0, confidence)), 2), "image": image, "note": note}
         self.out.put({"type": "event", "key": key, "row": row}, file_bytes)
+
+    def snapshot(self, key):
+        """(image path for events.csv, jpeg bytes) of the latest camera picture, or ("", None) if it is stale/missing."""
+        try:
+            if time.time() - self.photo_src.stat().st_mtime > 2.0:
+                return "", None
+            data = self.photo_src.read_bytes()            # inspect_node replaces the file atomically
+        except OSError:
+            return "", None
+        name = "img/%s_%s_%d.jpg" % (self.session, key.replace(":", "_"), int(time.time() * 10) % 100000)
+        return name, data
 
     # ---- callbacks ----
     def on_odom(self, m):
@@ -172,8 +188,10 @@ class Bridge(Node):
                 along, side, mid = np.median(a[:, 0]), np.median(a[:, 1]), np.median(a[:, 2])
                 x, y = self.ahead(mid)
                 self.n_slope += 1
-                self.event("slope:%s:%d" % (self.run, self.n_slope), "slope", abs(along), "deg", x, y, self.n_ok / max(1, self.n_all),
-                           "종단 %+.1f° · 횡단 %+.1f° (카메라 %d회 중앙값)" % (along, side, len(a)))
+                key = "slope:%s:%d" % (self.run, self.n_slope)
+                image, data = self.snapshot(key) if abs(along) >= self.slope_photo_deg else ("", None)
+                self.event(key, "slope", abs(along), "deg", x, y, self.n_ok / max(1, self.n_all),
+                           "종단 %+.1f° · 횡단 %+.1f° (카메라 %d회 중앙값)" % (along, side, len(a)), image, data)
             self.slope_buf, self.slope_from, self.n_ok, self.n_all = [], self.pose[:2], 0, 0
         if r.get("step_confirmed") and r.get("step_confirmed_dz_m") is not None:
             dz, dist = r["step_confirmed_dz_m"], r.get("step_confirmed_dist_m") or 1.0
@@ -183,8 +201,10 @@ class Bridge(Node):
             if old is None or dist < old[0]:                    # new step, or a closer (better) view of it
                 key = old[1] if old else "step:%d_%d" % cell
                 self.steps[cell] = (dist, key)
+                image, data = self.snapshot(key)
                 self.event(key, "step", abs(dz) * 100, "cm", x, y, 0.9,
-                           "%s 단차 %.1f cm (%.1f m 앞에서 확인)" % ("오르막" if dz > 0 else "내리막", abs(dz) * 100, dist))
+                           "%s 단차 %.1f cm (%.1f m 앞에서 확인)" % ("오르막" if dz > 0 else "내리막", abs(dz) * 100, dist),
+                           image, data)
 
     def on_timer(self):
         if self.pose is None and time.time() - self.t_start > 10:

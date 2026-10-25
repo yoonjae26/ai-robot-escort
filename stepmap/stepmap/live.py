@@ -201,9 +201,23 @@ LIVE_SCRIPT = """
     on = !on; show();
     try { sessionStorage.setItem("stepmap-cam", on ? "1" : "0"); } catch (e) {}
   };
-  img.onload = function () { busy = false; txt.textContent = "실시간 카메라 · " + hhmmss(new Date()); };
-  img.onerror = function () { busy = false; txt.textContent = "카메라 없음 (inspect.sh 실행 중인지 확인)"; };
-  setInterval(function () { if (on && !busy) { busy = true; img.src = "camera.jpg?t=" + Date.now(); } }, 330);
+  // 연속 전송(camera.mjpg)으로 받는다. 끊기면(로봇 카메라 멈춤·네트워크) 3초 뒤 다시 연결
+  var streaming = false;
+  function camOpen() {
+    if (!on || streaming) return;
+    streaming = true;
+    txt.textContent = "실시간 카메라 연결 중…";
+    img.src = "camera.mjpg?t=" + Date.now();
+  }
+  function camClose() { streaming = false; img.removeAttribute("src"); }
+  img.onload = function () { txt.textContent = "실시간 카메라"; };
+  img.onerror = function () {
+    streaming = false;
+    txt.textContent = "카메라 없음 (inspect.sh 실행 중인지 확인) · 다시 연결 중";
+    setTimeout(camOpen, 3000);
+  };
+  var showCam = show;
+  show = function () { showCam(); if (on) camOpen(); else camClose(); };
   show();
 })();
 </script>
@@ -583,6 +597,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(500, str(e).encode("utf-8"), "text/plain; charset=utf-8")
         elif u.path == "/camera.jpg":
             self._camera()
+        elif u.path == "/camera.mjpg":
+            self._camera_stream()
         elif u.path == "/dashboard.html" and not (s.dir / OUT_DIR / "dashboard.html").is_file():
             self._send(200, WAITING_PAGE.replace("__VERSION__", "0").encode("utf-8"), "text/html; charset=utf-8")
         elif u.path.startswith("/files/"):
@@ -607,6 +623,46 @@ class _Handler(BaseHTTPRequestHandler):
             except (urllib.error.URLError, OSError):
                 pass
         self._send(404, b"no camera", "text/plain")
+
+    def _camera_stream(self):
+        """실시간 카메라 연속 전송 (MJPEG). 로봇: 카메라 사진 파일이 바뀔 때마다 바로 보낸다 (사진마다 요청하는 것보다
+        빠르고 지연이 적다). 노트북(--pull): 로봇의 스트림을 그대로 이어 준다."""
+        s = self.store
+        url = (s.pull_state or {}).get("url")
+        local = s.camera and Path(s.camera).is_file()
+        if not local and not (url and s.pull_state.get("ok")):
+            self._send(404, b"no camera", "text/plain")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            if local:
+                cam, last, idle = Path(s.camera), 0.0, 0.0
+                while idle < CAMERA_IDLE_S:
+                    try:
+                        m = cam.stat().st_mtime
+                        if m != last:
+                            last, idle = m, 0.0
+                            data = cam.read_bytes()
+                            self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n"
+                                             % len(data) + data + b"\r\n")
+                            self.wfile.flush()
+                    except FileNotFoundError:
+                        pass
+                    time.sleep(CAMERA_POLL_S)
+                    idle += CAMERA_POLL_S
+            else:
+                with urllib.request.urlopen(f"{url}/camera.mjpg", timeout=CAMERA_IDLE_S) as r:
+                    while True:
+                        chunk = r.read1(65536)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+        except (OSError, urllib.error.URLError):     # 브라우저가 닫히거나 로봇과 끊김
+            pass
 
     def do_POST(self):
         s = self.store
@@ -754,6 +810,8 @@ def _puller(store: LiveStore, urls, stop: threading.Event):
 
 
 DEFAULT_CAMERA = "/dev/shm/terrain_live.jpg"   # 로봇: inspect_node.py가 초당 여러 번 쓰는 최신 카메라 사진
+CAMERA_POLL_S = 0.015            # MJPEG: 카메라 사진 파일이 바뀌었는지 보는 간격
+CAMERA_IDLE_S = 10.0             # MJPEG: 이만큼 새 사진이 없으면 스트림을 닫는다 (브라우저가 다시 연결)
 
 
 def serve(folder: str | Path, port: int = 8060, config: str | Path = "config.yaml", pull: str | None = None,
