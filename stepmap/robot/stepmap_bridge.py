@@ -124,6 +124,7 @@ class Bridge(Node):
         self.steps = {}                                          # 0.5 m cell -> (dist, key)
         self.inspect_seen = {}                                   # event id -> (h_mm, snap mtime)
         self.t_start = time.time()
+        self.battery = None
         self.run = time.strftime("%H%M%S")                       # slope keys stay unique after a bridge restart
         self.create_subscription(Odometry, P("odom_topic", "/utlidar/robot_odom").value, self.on_odom,
                                  qos_profile_sensor_data)
@@ -192,8 +193,10 @@ class Bridge(Node):
         self.read_inspect()
         try:
             st = json.loads(Path("/dev/shm/auto_recorder.json").read_text())
-            if st.get("battery_soc_pct") is not None:
-                self.out.put({"type": "status", "row": {"battery": int(st["battery_soc_pct"])}})
+            pct = st.get("battery_pct", st.get("battery_soc_pct"))      # auto_recorder writes battery_pct
+            if pct is not None and pct != self.battery:                  # send only when it changes
+                self.battery = int(pct)
+                self.out.put({"type": "status", "row": {"battery": self.battery}})
         except (OSError, ValueError):
             pass
 

@@ -40,7 +40,8 @@ from pathlib import Path
 
 from .events import (_NUMERIC_DIGITS, EVENT_COLUMNS, FOOT_TRACE_COLUMNS, FormatError, GeoRef, georef_from_config,
                      link_foot_traces, load_config, merge_events, merge_from_config, thresholds_from_config,
-                     validate_events, validate_foot_traces, write_events, write_foot_traces, write_trajectory)
+                     validate_events, validate_foot_traces, vworld_key_from_config, write_events, write_foot_traces,
+                     write_trajectory)
 
 STREAM = "stream.jsonl"
 META = "live_meta.json"
@@ -54,12 +55,12 @@ PULL_PERIOD_S = 1.0
 FALLBACK_GEO = GeoRef(33.4860373, 126.4866073, 0.0)
 
 LIVE_SCRIPT = """
-<div id="stepmap-live-cam" style="display:none;position:fixed;left:12px;bottom:44px;z-index:100000;width:min(420px,70vw);
+<div id="stepmap-live-cam" style="display:none;position:fixed;right:12px;top:108px;z-index:100000;width:min(420px,70vw);
  background:#111;border-radius:10px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.3)">
  <img id="stepmap-live-img" alt="실시간 카메라" style="display:block;width:100%">
  <div id="stepmap-live-camtxt" style="position:absolute;left:8px;top:6px;font:600 11px system-ui,sans-serif;color:#fff;
   text-shadow:0 1px 2px #000">실시간 카메라</div></div>
-<div style="position:fixed;left:12px;bottom:12px;z-index:100000;display:flex;gap:6px;
+<div style="position:fixed;right:12px;top:72px;z-index:100000;display:flex;gap:6px;
  font:600 12px/1.6 system-ui,sans-serif">
  <div id="stepmap-live" style="background:rgba(255,255,255,.92);border:1px solid #d9d9d9;border-radius:999px;
   padding:2px 12px;color:#333;box-shadow:0 1px 4px rgba(0,0,0,.12)">● 실시간 연결 중…</div>
@@ -156,6 +157,7 @@ class LiveStore:
         if (self.dir / META).is_file():
             self.meta.update(json.loads((self.dir / META).read_text(encoding="utf-8")))
         self.version = 0                      # 내보낸 결과가 바뀔 때마다 증가 (대시보드 새로고침 기준)
+        self.robot_photo: Path | None = None  # 로봇 카드 사진 (serve가 config 옆 data/robot.png를 넣는다)
         self.summary = {"events": 0, "danger": 0, "warn": 0}
         self.dirty = False
         self.pull_state: dict = {}                # --pull: 지금 받는 주소와 상태
@@ -320,6 +322,8 @@ class LiveStore:
         if not force and sig == self._sig and not stale:
             return False
         self._sig, self._drawn_at = sig, time.time()
+        if self.robot_photo and self.robot_photo.is_file() and not (self.dir / "robot.png").exists():
+            shutil.copyfile(self.robot_photo, self.dir / "robot.png")   # write_dashboard는 events.csv 옆에서 찾는다
         if events or traj:
             meta = _meta(self.cfg, status)
             dash = write_dashboard(self.dir / "events.csv", self.dir / "trajectory.csv", out / "dashboard.html",
@@ -349,7 +353,8 @@ class LiveStore:
 def _meta(cfg: dict, status: dict) -> dict:
     robot = cfg.get("robot") or {}
     battery = status.get("battery", robot.get("battery"))
-    return {"area": str((cfg.get("report") or {}).get("area") or ""),
+    return {"vworld_key": vworld_key_from_config(cfg),
+            "area": str((cfg.get("report") or {}).get("area") or ""),
             "robot": str(robot.get("name") or ""),
             "model": str(robot.get("model") or ""),
             "sensors": [str(x) for x in robot.get("sensors") or []],
@@ -552,6 +557,7 @@ def serve(folder: str | Path, port: int = 8060, config: str | Path = "config.yam
     cfg = load_config(config) if Path(config).exists() else {}
     store = LiveStore(folder, cfg, geo)
     store.camera = camera if camera is not None else (None if pull else DEFAULT_CAMERA)
+    store.robot_photo = Path(config).resolve().parent / "data" / "robot.png"
     if store.geo_is_fallback:
         print("[live] config.yaml geo 미설정: 지도 위치는 기준점 대비 상대값입니다 (--geo LAT,LON,HEADING)", flush=True)
     _Handler.store = store

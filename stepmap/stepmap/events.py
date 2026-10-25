@@ -187,6 +187,14 @@ class GeoRef:
         return east * s + north * c, -east * c + north * s
 
 
+def vworld_key_from_config(cfg: dict) -> str:
+    """VWorld(국토교통부) 지도 인증키: 환경변수 STEPMAP_VWORLD_KEY가 먼저, 없으면 config의 map.vworld_key.
+    키는 공개 저장소에 올리지 않도록 환경변수나 커밋하지 않는 설정 파일에 둔다. 없으면 빈 문자열."""
+    import os
+    key = os.environ.get("STEPMAP_VWORLD_KEY") or str((cfg.get("map") or {}).get("vworld_key") or "")
+    return "" if key.startswith("<") else key
+
+
 def georef_from_config(cfg: dict) -> GeoRef | None:
     """config의 geo 섹션. 값이 아직 <...> 자리표시자면 None."""
     geo = cfg.get("geo") or {}

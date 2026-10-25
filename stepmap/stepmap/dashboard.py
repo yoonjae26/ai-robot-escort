@@ -155,6 +155,8 @@ def build_payload(events: list[dict], traj: list[dict], thresholds: dict | None 
         "robot_sensors": list((meta or {}).get("sensors") or ROBOT_SENSORS),
         "robot_photo": (meta or {}).get("robot_photo"),
         "robot_battery": _battery((meta or {}).get("battery")),  # config robot.battery (%), 없으면 None → 줄 숨김
+        # 국토교통부 VWorld 인증키 (config map.vworld_key 또는 환경변수 STEPMAP_VWORLD_KEY). 있으면 한국 지도·위성 지도
+        "vworld_key": (meta or {}).get("vworld_key") or "",
         "meters": display_meters(path_length(traj)),  # 로봇 카드 이동 거리 (신고서와 같은 반올림)
         "distance_m": path_length(traj),  # 1m 미만 흔들림은 거른다. 반올림은 화면에서 한 번만
         "thresholds": {k: list(v) for k, v in th.items()},
@@ -1565,6 +1567,10 @@ _TEMPLATE = r"""<!doctype html>
     { name: "topo", url: "__TILE_FALLBACK_URL__", sub: "__TILE_FALLBACK_SUBDOMAINS__", maxNative: __TILE_FALLBACK_MAX_NATIVE_ZOOM__,
       attribution: '__TILE_FALLBACK_ATTRIBUTION__' },
   ];
+  // VWorld(국토교통부) 키가 있으면 한국 일반 지도를 맨 앞에 둔다 (안 되면 아래 제공처로 넘어간다)
+  const VWORLD = DATA.vworld_key ? `https://api.vworld.kr/req/wmts/1.0.0/${encodeURIComponent(DATA.vworld_key)}` : "";
+  const VWORLD_ATTR = '&copy; <a href="https://www.vworld.kr">VWorld</a> (국토교통부)';
+  if (VWORLD) TILES.unshift({ name: "vworld", url: `${VWORLD}/Base/{z}/{y}/{x}.png`, sub: "", maxNative: 19, attribution: VWORLD_ATTR });
   state.tileIdx = 0;          // 지금 쓰는 제공처 (지도 세 개가 함께 쓴다)
   state.tileChecks = {};      // 제공처별 확인 결과 (Promise<boolean>)
   root.dataset.tiles = TILES[0].name;
@@ -1573,11 +1579,50 @@ _TEMPLATE = r"""<!doctype html>
     root.dataset.tiles = t.name;  // OpenTopoMap이면 CSS가 회색 필터를 건다
     return L.tileLayer(t.url, { subdomains: t.sub, maxNativeZoom: t.maxNative, maxZoom, attribution: t.attribution });
   };
+  // 일반 지도 / 위성 지도 전환 (VWorld 키가 있을 때). 위성은 VWorld 영상 + 도로·지명 겹침, 바탕 지도 위에 덮는다
+  state.satellite = false;
+  const satMaps = [];
+  function addSatelliteToggle(map, position) {
+    if (!VWORLD) return;
+    const sat = L.layerGroup([
+      L.tileLayer(`${VWORLD}/Satellite/{z}/{y}/{x}.jpeg`, { maxNativeZoom: 19, maxZoom: 22, attribution: VWORLD_ATTR }),
+      L.tileLayer(`${VWORLD}/Hybrid/{z}/{y}/{x}.png`, { maxNativeZoom: 19, maxZoom: 22 }),
+    ]);
+    const ctl = L.control({ position });
+    ctl.onAdd = () => {
+      const box = L.DomUtil.create("div", "leaflet-bar maptype");
+      box.style.cssText = "display:flex;overflow:hidden;border-radius:999px;background:#fff;font:600 12px/1 inherit";
+      const mk = (label, on) => {
+        const b = L.DomUtil.create("button", "", box);
+        b.type = "button";
+        b.textContent = label;
+        b.style.cssText = "border:0;padding:8px 12px;cursor:pointer;font:inherit;background:transparent;color:#333";
+        L.DomEvent.on(b, "click", (ev) => { L.DomEvent.stop(ev); setSatellite(on); });
+        return b;
+      };
+      const normal = mk("일반 지도", false), satellite = mk("위성 지도", true);
+      satMaps.push({ map, sat, normal, satellite });
+      L.DomEvent.disableClickPropagation(box);
+      return box;
+    };
+    ctl.addTo(map);
+    setSatellite(state.satellite);
+  }
+  function setSatellite(on) {
+    state.satellite = on;
+    for (const m of satMaps) {
+      if (on) m.sat.addTo(m.map); else m.sat.remove();
+      m.normal.style.background = on ? "transparent" : "#2f2a2f";
+      m.normal.style.color = on ? "#333" : "#fff";
+      m.satellite.style.background = on ? "#2f2a2f" : "transparent";
+      m.satellite.style.color = on ? "#fff" : "#333";
+    }
+  }
   // 벡터 지도 색 (Python VECTOR_PALETTE): positron 스타일을 받아 층마다 색을 덮어쓴다
   const MAP_COLORS = __MAP_COLORS__;
   let baseStyle = null;
   function vectorStyle(mode) {
-    if (!baseStyle) baseStyle = fetch(TILES[0].url).then((r) => { if (!r.ok) throw new Error(`http ${r.status}`); return r.json(); });
+    if (!baseStyle) baseStyle = fetch(TILES.find((t) => t.vector).url).then((r) => { if (!r.ok) throw new Error(`http ${r.status}`); return r.json(); });
     return baseStyle.then((st) => recolorStyle(st, MAP_COLORS[mode] || MAP_COLORS.light));
   }
   // 줌에 따라 바뀌는 값(interpolate·step)은 단계별 값에 곱한다 (["zoom"]은 맨 바깥 식에서만 쓸 수 있어 식째 곱할 수 없다)
@@ -1702,6 +1747,7 @@ _TEMPLATE = r"""<!doctype html>
     const gen = ++state.gen;
     const map = L.map("map", { zoomControl: false });
     L.control.zoom({ position: "bottomright" }).addTo(map);  // 왼쪽 위는 로고·필터 카드 자리
+    addSatelliteToggle(map, "bottomright");
     state.map = map;
     state.mode = "tiles";
     $("map-attr").append(map.attributionControl.getContainer());  // 화면 가장 아래 오른쪽 구석 (지도를 지우면 같이 지워진다)
@@ -1712,7 +1758,8 @@ _TEMPLATE = r"""<!doctype html>
     if (ROBOT_LL) bounds.extend(ROBOT_LL);
     // 떠 있는 카드에 마커가 가려지지 않게 카드 높이·폭만큼 여백을 두고 맞춘다
     const pad = homePadding();
-    map.fitBounds(bounds, { paddingTopLeft: pad.tl, paddingBottomRight: pad.br, animate: false });
+    // maxZoom: 지점·경로가 한 점뿐일 때(로봇이 서 있는 실시간 첫 화면) 타일이 없는 배율까지 확대되지 않게
+    map.fitBounds(bounds, { paddingTopLeft: pad.tl, paddingBottomRight: pad.br, animate: false, maxZoom: 19 });
     // 로봇개 마커: 로봇의 마지막 위치 (경로 선은 그리지 않는다)
     if (ROBOT_LL) {
       const robot = L.marker(ROBOT_LL, { icon: L.divIcon({ className: "robot-mk", iconSize: [36, 36], iconAnchor: [18, 18],
@@ -2350,6 +2397,7 @@ _TEMPLATE = r"""<!doctype html>
         DM.mode = "tiles";
         const map = L.map("d-map", { zoomControl: true, scrollWheelZoom: false, maxZoom: 22 });
         map.attributionControl.setPosition("bottomright");
+        addSatelliteToggle(map, "bottomleft");
         DM.map = map;
         DM.pendingTiles = true;  // 타일은 선택 지점으로 범위를 정한 뒤 붙인다
       }
@@ -2860,6 +2908,7 @@ _TEMPLATE = r"""<!doctype html>
     const map = L.map("h-map", { zoomControl: false });
     L.control.zoom({ position: "topright" }).addTo(map);  // 왼쪽 위는 "이동경로" 버튼 자리
     map.attributionControl.setPosition("bottomright");
+    addSatelliteToggle(map, "bottomleft");
     HM.map = map;
     HM.pendingTiles = true;  // 타일은 그날 경로로 범위를 정한 뒤 붙인다 (drawHMap)
   }

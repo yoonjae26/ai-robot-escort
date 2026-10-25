@@ -82,7 +82,8 @@ def test_home_no_route_drawn_and_session(page):
     assert "DATA.trajectory_xy" in script  # 지점이 없을 때만 쓰는 범위 대비
     # 지도 범위: 전체 측정 지점 기준 한 번 (판정 필터와 무관)
     assert "L.latLngBounds(DATA.events.length ? DATA.events.map((e) => [e.lat, e.lon]) : DATA.trajectory)" in page
-    assert "map.fitBounds(bounds, { paddingTopLeft: pad.tl, paddingBottomRight: pad.br, animate: false });" in page
+    # maxZoom 19: 실시간 첫 화면처럼 점이 하나뿐이어도 타일이 있는 배율에서 멈춘다
+    assert "map.fitBounds(bounds, { paddingTopLeft: pad.tl, paddingBottomRight: pad.br, animate: false, maxZoom: 19 });" in page
     assert "const pts = (DATA.events.length ? DATA.events.map((e) => [e.x, e.y]) : DATA.trajectory_xy).concat(ROBOT_XY ? [ROBOT_XY] : []);" in page
     assert 'id="tb-date"' in page  # 위쪽 바 오른쪽: 마지막 점검 날짜
     assert "body:has(#page-home:not([hidden])) { overflow: hidden; }" in page  # 1260px 이상: 지도 전체, 페이지 스크롤 없음

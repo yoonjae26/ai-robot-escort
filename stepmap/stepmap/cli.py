@@ -130,11 +130,12 @@ def cmd_merge(args: argparse.Namespace) -> int:
 
 def cmd_map(args: argparse.Namespace) -> int:
     from .dashboard import MissingLatLon, write_dashboard
-    from .events import FormatError, load_config
+    from .events import FormatError, load_config, vworld_key_from_config
 
     cfg = load_config(args.config) if Path(args.config).exists() else {}
     robot = cfg.get("robot") or {}
-    meta = {"area": str((cfg.get("report") or {}).get("area") or ""),
+    meta = {"vworld_key": vworld_key_from_config(cfg),
+            "area": str((cfg.get("report") or {}).get("area") or ""),
             "robot": str(robot.get("name") or ""),
             "model": str(robot.get("model") or ""),
             "sensors": [str(x) for x in robot.get("sensors") or []],
