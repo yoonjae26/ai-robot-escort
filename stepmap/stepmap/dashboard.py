@@ -155,6 +155,8 @@ def build_payload(events: list[dict], traj: list[dict], thresholds: dict | None 
         "robot_sensors": list((meta or {}).get("sensors") or ROBOT_SENSORS),
         "robot_photo": (meta or {}).get("robot_photo"),
         "robot_battery": _battery((meta or {}).get("battery")),  # config robot.battery (%), 없으면 None → 줄 숨김
+        # 국토교통부 VWorld 인증키 (config map.vworld_key 또는 환경변수 STEPMAP_VWORLD_KEY). 있으면 한국 지도·위성 지도
+        "vworld_key": (meta or {}).get("vworld_key") or "",
         "meters": display_meters(path_length(traj)),  # 로봇 카드 이동 거리 (신고서와 같은 반올림)
         "distance_m": path_length(traj),  # 1m 미만 흔들림은 거른다. 반올림은 화면에서 한 번만
         "thresholds": {k: list(v) for k, v in th.items()},
@@ -403,9 +405,13 @@ def write_dashboard(events_path: str | Path, traj_path: str | Path, out_path: st
     blocks_path = Path(blocks_path) if blocks_path else Path(events_path).parent / "blocks.csv"
     blocks = read_blocks(blocks_path) if blocks_path.is_file() else None
     stepped = count_stepped_blocks(blocks, trace_rows) if blocks is not None or trace_rows else None
-    page = build_html(events, read_trajectory(traj_path), thresholds, photos, meta, traces, report_href, history,
+    traj = read_trajectory(traj_path)
+    page = build_html(events, traj, thresholds, photos, meta, traces, report_href, history,
                       stepped, blocks_payload(blocks, block_size))
     out.write_text(page, encoding="utf-8")
+    if meta.get("vworld_key"):  # VWorld 3D 지도 (대시보드의 '3D 지도' 버튼이 띄운다)
+        from .map3d import MAP3D_NAME, build_map3d_html
+        (out.parent / MAP3D_NAME).write_text(build_map3d_html(events, traj, meta["vworld_key"]), encoding="utf-8")
     return out
 
 
@@ -552,6 +558,8 @@ _TEMPLATE = r"""<!doctype html>
     --ctl-on: #363236; --ctl-on-text: #FFFFFF; --ctl-shadow: 0 1px 2px rgb(54 50 54 / 0.1), 0 4px 12px rgb(54 50 54 / 0.1);
   }
   :root[data-tiles="topo"] .mapcard[data-map="light"] { --tile-filter: grayscale(1) contrast(0.85) brightness(1.05); --tile-opacity: 0.55; }
+  :root[data-tiles="vworld"] .mapcard[data-map="light"] { --tile-filter: grayscale(1) contrast(0.8) brightness(1.1); --tile-opacity: 0.6; }
+  /* 위성 지도는 타일 칸 밖(sat 칸)에 그려 회색 필터를 받지 않는다 */
   :root[data-tiles="vector"] .mapcard[data-map] { --tile-filter: none; --tile-opacity: 1; }  /* 벡터 지도는 어두운 지도도 스타일 색으로 */
   .mapcard[data-map="dark"] {
     --map-bg: #1F1C1F; --tile-filter: grayscale(1) invert(1) brightness(0.85) contrast(0.9);
@@ -965,9 +973,9 @@ _TEMPLATE = r"""<!doctype html>
   :root[data-theme="dark"] .rc-art::after { background: radial-gradient(closest-side, rgb(0 0 0 / 0.55), rgb(0 0 0 / 0)); }
   .rc-art img, .rc-art svg { position: relative; z-index: 1; display: block; width: 100%; height: 100%; object-fit: contain; object-position: right bottom; }
   .rc-art svg { color: var(--text); }
-  /* 사진: 카드 안쪽 높이의 약 92%, 오른쪽 아래(아래 10px)에 카드 안으로. 위쪽은 ← → 버튼 옆 높이까지 (버튼이 위 레이어,
-     버튼 뒤에는 로봇 몸통 뒤쪽). 폭·오른쪽 여백(16~44px)은 JS(fitRobotPhoto)가 칩 오른쪽 끝 + 12px 안에서 최대로 맞춘다 */
-  .rc-art.photo { right: 44px; bottom: 10px; width: 45%; height: calc((100% - 32px) * 0.92); opacity: 1; }
+  /* 사진: 카드 높이 + 14px로 위(4px)·아래(10px)·오른쪽(8px)으로 살짝 넘친다. ← → 버튼이 위 레이어.
+     폭은 JS(fitRobotPhoto)가 칩 오른쪽 끝 + 4px부터 카드 오른쪽 넘침까지 안에서 최대로 맞춘다 */
+  .rc-art.photo { right: -8px; bottom: -10px; width: 52%; height: calc(100% + 14px); opacity: 1; }
   .rc-art.photo::after { left: auto; right: calc(var(--shot-w, 100%) * 0.15); bottom: -5px; width: calc(var(--shot-w, 100%) * 0.7); height: 10px;
                          background: rgb(54 50 54 / 0.12); filter: blur(8px); }  /* 발밑 옅은 타원 그림자: 사진 폭의 70% */
   .rc-art[hidden], .rc-art img[hidden], .rc-art svg[hidden] { display: none; }
@@ -1303,11 +1311,12 @@ _TEMPLATE = r"""<!doctype html>
     ok:     { label: "정상", glyph: "✓",  rank: 1, z: 100 },
   };
   const LEVELS = ["danger", "warn", "ok"];
-  const KINDS = ["step", "slope", "crack", "loose"];
-  // 종류별 모양: 단차 ■ / 경사 ▲ / 균열 ✕ / 흔들림 점선 고리 + 점  (색만으로 구분하지 않음). r = 2px 바탕색 테두리
+  const KINDS = ["step", "slope", "uneven", "crack", "loose"];
+  // 종류별 모양: 단차 ■ / 경사 ▲ / 요철 물결 / 균열 ✕ / 흔들림 점선 고리 + 점  (색만으로 구분하지 않음). r = 2px 바탕색 테두리
   const KIND = {
     step:  { label: "단차",  shape: (c, r) => `<rect x="5" y="5" width="14" height="14" rx="1.5" style="fill:${c};stroke:${r};stroke-width:4;paint-order:stroke"/>` },
     slope: { label: "경사",  shape: (c, r) => `<polygon points="12,3.5 21,19.5 3,19.5" style="fill:${c};stroke:${r};stroke-width:4;stroke-linejoin:round;paint-order:stroke"/>` },
+    uneven: { label: "요철", shape: (c, r) => `<path d="M3 15L7.5 8.5L12 15L16.5 8.5L21 15" style="fill:none;stroke:${r};stroke-width:8;stroke-linecap:round;stroke-linejoin:round"/><path d="M3 15L7.5 8.5L12 15L16.5 8.5L21 15" style="fill:none;stroke:${c};stroke-width:4;stroke-linecap:round;stroke-linejoin:round"/>` },
     crack: { label: "균열",  shape: (c, r) => `<path d="M6 6L18 18M18 6L6 18" style="fill:none;stroke:${r};stroke-width:8;stroke-linecap:round"/><path d="M6 6L18 18M18 6L6 18" style="fill:none;stroke:${c};stroke-width:4;stroke-linecap:round"/>` },
     loose: { label: "흔들림", shape: (c, r) =>
       `<circle cx="12" cy="12" r="9.6" style="fill:none;stroke:${r};stroke-width:4.6"/>` +
@@ -1565,6 +1574,11 @@ _TEMPLATE = r"""<!doctype html>
     { name: "topo", url: "__TILE_FALLBACK_URL__", sub: "__TILE_FALLBACK_SUBDOMAINS__", maxNative: __TILE_FALLBACK_MAX_NATIVE_ZOOM__,
       attribution: '__TILE_FALLBACK_ATTRIBUTION__' },
   ];
+  // VWorld(국토교통부) 키가 있으면 벡터 지도 다음에 한국 일반 지도를 둔다 (회색 필터로 디자인 색에 맞춤).
+  // 위성 지도·3D 지도는 VWorld만 쓴다
+  const VWORLD = DATA.vworld_key ? `https://api.vworld.kr/req/wmts/1.0.0/${encodeURIComponent(DATA.vworld_key)}` : "";
+  const VWORLD_ATTR = '&copy; <a href="https://www.vworld.kr">VWorld</a> (국토교통부)';
+  if (VWORLD) TILES.splice(1, 0, { name: "vworld", url: `${VWORLD}/Base/{z}/{y}/{x}.png`, sub: "", maxNative: 19, attribution: VWORLD_ATTR });
   state.tileIdx = 0;          // 지금 쓰는 제공처 (지도 세 개가 함께 쓴다)
   state.tileChecks = {};      // 제공처별 확인 결과 (Promise<boolean>)
   root.dataset.tiles = TILES[0].name;
@@ -1573,11 +1587,81 @@ _TEMPLATE = r"""<!doctype html>
     root.dataset.tiles = t.name;  // OpenTopoMap이면 CSS가 회색 필터를 건다
     return L.tileLayer(t.url, { subdomains: t.sub, maxNativeZoom: t.maxNative, maxZoom, attribution: t.attribution });
   };
+  // 일반 지도 / 위성 지도 전환 (VWorld 키가 있을 때). 위성은 VWorld 영상 + 도로·지명 겹침, 바탕 지도 위에 덮는다
+  state.satellite = false;
+  const satMaps = [];
+  function addSatelliteToggle(map, position, with3d) {
+    if (!VWORLD) return;
+    if (!map.getPane("sat")) map.createPane("sat").style.zIndex = 250;  // 바탕 지도(200) 위, 표시(400) 아래
+    const sat = L.layerGroup([
+      L.tileLayer(`${VWORLD}/Satellite/{z}/{y}/{x}.jpeg`, { pane: "sat", maxNativeZoom: 19, maxZoom: 22, attribution: VWORLD_ATTR }),
+      L.tileLayer(`${VWORLD}/Hybrid/{z}/{y}/{x}.png`, { pane: "sat", maxNativeZoom: 19, maxZoom: 22 }),
+    ]);
+    const ctl = L.control({ position });
+    ctl.onAdd = () => {
+      const box = L.DomUtil.create("div", "leaflet-bar maptype");
+      box.style.cssText = "display:flex;overflow:hidden;border-radius:999px;background:var(--ctl-bg,#fff);font:600 12px/1 inherit";
+      const mk = (label, on) => {
+        const b = L.DomUtil.create("button", "", box);
+        b.type = "button";
+        b.textContent = label;
+        b.style.cssText = "border:0;padding:8px 12px;cursor:pointer;font:inherit;background:transparent;color:#333";
+        L.DomEvent.on(b, "click", (ev) => { L.DomEvent.stop(ev); setSatellite(on); });
+        return b;
+      };
+      const normal = mk("일반 지도", false), satellite = mk("위성 지도", true);
+      if (with3d) {
+        const b3 = L.DomUtil.create("button", "", box);
+        b3.type = "button";
+        b3.textContent = "3D 지도";
+        b3.style.cssText = "border:0;border-left:1px solid #e2e2e2;padding:8px 12px;cursor:pointer;font:inherit;background:transparent;color:#333";
+        L.DomEvent.on(b3, "click", (ev) => { L.DomEvent.stop(ev); open3d(true); });
+      }
+      satMaps.push({ map, sat, normal, satellite });
+      L.DomEvent.disableClickPropagation(box);
+      return box;
+    };
+    ctl.addTo(map);
+    setSatellite(state.satellite);
+  }
+  // VWorld 3D 지도 (map3d.html, 같은 폴더): 화면 전체에 띄운다. 새로고침(실시간 갱신)되어도 열린 상태를 유지
+  function open3d(on) {
+    let ov = document.getElementById("map3d-overlay");
+    try { sessionStorage.setItem("stepmap-3d", on ? "1" : "0"); } catch (e) {}
+    if (!on) { if (ov) ov.remove(); return; }
+    if (ov) return;
+    ov = document.createElement("div");
+    ov.id = "map3d-overlay";
+    ov.style.cssText = "position:fixed;inset:0;z-index:99999;background:#1f1c1f";
+    const fr = document.createElement("iframe");
+    fr.src = "map3d.html";
+    fr.title = "3D 지도";
+    fr.style.cssText = "border:0;width:100%;height:100%";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "2D 지도로 돌아가기";
+    close.style.cssText = "position:absolute;right:12px;bottom:24px;z-index:2;border:0;border-radius:999px;padding:10px 16px;" +
+                          "font:600 13px/1 inherit;background:#2f2a2f;color:#fff;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3)";
+    close.onclick = () => open3d(false);
+    ov.append(fr, close);
+    document.body.append(ov);
+  }
+  try { if (VWORLD && sessionStorage.getItem("stepmap-3d") === "1") setTimeout(() => open3d(true), 0); } catch (e) {}
+  function setSatellite(on) {
+    state.satellite = on;
+    for (const m of satMaps) {
+      if (on) m.sat.addTo(m.map); else m.sat.remove();
+      m.normal.style.background = on ? "transparent" : "#2f2a2f";
+      m.normal.style.color = on ? "#333" : "#fff";
+      m.satellite.style.background = on ? "#2f2a2f" : "transparent";
+      m.satellite.style.color = on ? "#fff" : "#333";
+    }
+  }
   // 벡터 지도 색 (Python VECTOR_PALETTE): positron 스타일을 받아 층마다 색을 덮어쓴다
   const MAP_COLORS = __MAP_COLORS__;
   let baseStyle = null;
   function vectorStyle(mode) {
-    if (!baseStyle) baseStyle = fetch(TILES[0].url).then((r) => { if (!r.ok) throw new Error(`http ${r.status}`); return r.json(); });
+    if (!baseStyle) baseStyle = fetch(TILES.find((t) => t.vector).url).then((r) => { if (!r.ok) throw new Error(`http ${r.status}`); return r.json(); });
     return baseStyle.then((st) => recolorStyle(st, MAP_COLORS[mode] || MAP_COLORS.light));
   }
   // 줌에 따라 바뀌는 값(interpolate·step)은 단계별 값에 곱한다 (["zoom"]은 맨 바깥 식에서만 쓸 수 있어 식째 곱할 수 없다)
@@ -1702,6 +1786,7 @@ _TEMPLATE = r"""<!doctype html>
     const gen = ++state.gen;
     const map = L.map("map", { zoomControl: false });
     L.control.zoom({ position: "bottomright" }).addTo(map);  // 왼쪽 위는 로고·필터 카드 자리
+    addSatelliteToggle(map, "bottomright", true);
     state.map = map;
     state.mode = "tiles";
     $("map-attr").append(map.attributionControl.getContainer());  // 화면 가장 아래 오른쪽 구석 (지도를 지우면 같이 지워진다)
@@ -1712,13 +1797,15 @@ _TEMPLATE = r"""<!doctype html>
     if (ROBOT_LL) bounds.extend(ROBOT_LL);
     // 떠 있는 카드에 마커가 가려지지 않게 카드 높이·폭만큼 여백을 두고 맞춘다
     const pad = homePadding();
-    map.fitBounds(bounds, { paddingTopLeft: pad.tl, paddingBottomRight: pad.br, animate: false });
+    // maxZoom: 지점·경로가 한 점뿐일 때(로봇이 서 있는 실시간 첫 화면) 타일이 없는 배율까지 확대되지 않게
+    map.fitBounds(bounds, { paddingTopLeft: pad.tl, paddingBottomRight: pad.br, animate: false, maxZoom: 19 });
     // 로봇개 마커: 로봇의 마지막 위치 (경로 선은 그리지 않는다)
     if (ROBOT_LL) {
       const robot = L.marker(ROBOT_LL, { icon: L.divIcon({ className: "robot-mk", iconSize: [36, 36], iconAnchor: [18, 18],
                                              html: `<span class="pulse"></span><span class="core"><svg viewBox="0 0 24 24" aria-hidden="true">${ROBOT_PATH}</svg></span>` }),
                            keyboard: true, zIndexOffset: 5000, title: "로봇 마지막 위치" }).addTo(map);
       robot.on("click", openRobotCard);  // 로봇개를 누르면 가장 최근에 찾은 위험 지점(없으면 주의)
+      window.stepmapMoveRobot = (ll) => robot.setLatLng(ll);  // 실시간(live): 다시 그리지 않고 로봇 위치만 옮긴다
       robot.getElement().setAttribute("role", "button");
       robot.getElement().setAttribute("aria-label", "로봇 마지막 위치: 가장 최근에 찾은 위험 지점 보기");
     }
@@ -2037,6 +2124,7 @@ _TEMPLATE = r"""<!doctype html>
     step:  { camera: "깊이 카메라 바닥 평면 대비 높이 차", foot: "발 접지 높이 차 (다른 발 대비)",
              "camera+foot": "깊이 카메라 바닥 평면 대비 높이 차 + 발 접지 높이 차 (교차 측정)" },
     slope: { camera: "깊이 카메라 바닥 평면 기울기" },
+    uneven: { camera: "깊이 카메라 바닥 높이 편차 (앞 0.4~1.2m, 95%−5%)" },
     crack: { camera: "RGB 영상 균열 검출 점수 (0~1)" },
     loose: { foot: "관절 각도 → 발끝 위치(정기구학), IMU 중력 정렬, 평소 걸음 대비" },
   };
@@ -2350,6 +2438,7 @@ _TEMPLATE = r"""<!doctype html>
         DM.mode = "tiles";
         const map = L.map("d-map", { zoomControl: true, scrollWheelZoom: false, maxZoom: 22 });
         map.attributionControl.setPosition("bottomright");
+        addSatelliteToggle(map, "bottomleft");
         DM.map = map;
         DM.pendingTiles = true;  // 타일은 선택 지점으로 범위를 정한 뒤 붙인다
       }
@@ -2476,12 +2565,9 @@ _TEMPLATE = r"""<!doctype html>
         const box = card.getBoundingClientRect();
         const chipRight = Math.max(0, ...[...card.querySelectorAll(".rc-dl dd")].filter((d) => !d.hidden).map((d) => d.getBoundingClientRect().right - box.left));
         art.style.height = "";
-        const want = art.clientHeight * img.naturalWidth / img.naturalHeight;  // 높이 92%일 때 사진 폭
-        const room = box.width - (chipRight + 13);                             // 칩 오른쪽 끝 + 12px부터 카드 오른쪽 끝까지
-        // 오른쪽 여백: 자리가 남으면 왼쪽으로(최대 44px), 모자라면 16px까지 줄여 사진을 최대로 (머리는 버튼 왼쪽에 오게)
-        const R = Math.max(16, Math.min(44, room - want));
-        const w = Math.max(0, Math.min(want, room - R));
-        art.style.right = `${R}px`;
+        const want = art.clientHeight * img.naturalWidth / img.naturalHeight;  // 카드 높이 + 14px일 때 사진 폭
+        const room = box.width - (chipRight + 4) + 8;                          // 칩 오른쪽 끝 + 4px부터 오른쪽 넘침(8px)까지
+        const w = Math.max(0, Math.min(want, room));
         art.style.width = `${w}px`;
         art.style.setProperty("--shot-w", `${w}px`);
       };
@@ -2860,6 +2946,7 @@ _TEMPLATE = r"""<!doctype html>
     const map = L.map("h-map", { zoomControl: false });
     L.control.zoom({ position: "topright" }).addTo(map);  // 왼쪽 위는 "이동경로" 버튼 자리
     map.attributionControl.setPosition("bottomright");
+    addSatelliteToggle(map, "bottomleft");
     HM.map = map;
     HM.pendingTiles = true;  // 타일은 그날 경로로 범위를 정한 뒤 붙인다 (drawHMap)
   }

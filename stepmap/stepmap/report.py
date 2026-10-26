@@ -23,7 +23,7 @@ from .events import (
 from .photos import LEG_NAMES, contact_label, prepare_photos
 
 KST = timezone(timedelta(hours=9))
-KIND_LABEL = {"step": "단차", "slope": "경사", "crack": "균열", "loose": "흔들림"}
+KIND_LABEL = {"step": "단차", "slope": "경사", "uneven": "요철", "crack": "균열", "loose": "흔들림"}
 LEVEL_LABEL = {"danger": "위험", "warn": "주의", "ok": "정상"}
 LEVEL_GLYPH = {"danger": "!!", "warn": "!", "ok": "✓"}
 LEVEL_RANK = {"danger": 3, "warn": 2, "ok": 1}

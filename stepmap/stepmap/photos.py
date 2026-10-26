@@ -53,7 +53,9 @@ def prepare_photos(events: list[dict], events_dir: str | Path, out_dir: str | Pa
                 w, h = im.size
                 k = PHOTO_SHORT_SIDE / min(w, h)
                 if k < 1:  # 줄이기만 한다
-                    im = im.resize((round(w * k), round(h * k)), Image.Resampling.LANCZOS)
+                    # Image.Resampling은 Pillow 9.1+. 로봇(Jetson, Ubuntu 20.04)은 Pillow 7이라 예전 이름으로 대신한다
+                    lanczos = getattr(Image, "Resampling", Image).LANCZOS
+                    im = im.resize((round(w * k), round(h * k)), lanczos)
                 name = _copy_name(e["id"], src)
                 (out_dir / PHOTO_DIR).mkdir(parents=True, exist_ok=True)
                 im.save(out_dir / PHOTO_DIR / name, "JPEG", quality=85, optimize=True)

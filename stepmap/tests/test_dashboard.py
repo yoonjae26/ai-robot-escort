@@ -82,7 +82,8 @@ def test_home_no_route_drawn_and_session(page):
     assert "DATA.trajectory_xy" in script  # 지점이 없을 때만 쓰는 범위 대비
     # 지도 범위: 전체 측정 지점 기준 한 번 (판정 필터와 무관)
     assert "L.latLngBounds(DATA.events.length ? DATA.events.map((e) => [e.lat, e.lon]) : DATA.trajectory)" in page
-    assert "map.fitBounds(bounds, { paddingTopLeft: pad.tl, paddingBottomRight: pad.br, animate: false });" in page
+    # maxZoom 19: 실시간 첫 화면처럼 점이 하나뿐이어도 타일이 있는 배율에서 멈춘다
+    assert "map.fitBounds(bounds, { paddingTopLeft: pad.tl, paddingBottomRight: pad.br, animate: false, maxZoom: 19 });" in page
     assert "const pts = (DATA.events.length ? DATA.events.map((e) => [e.x, e.y]) : DATA.trajectory_xy).concat(ROBOT_XY ? [ROBOT_XY] : []);" in page
     assert 'id="tb-date"' in page  # 위쪽 바 오른쪽: 마지막 점검 날짜
     assert "body:has(#page-home:not([hidden])) { overflow: hidden; }" in page  # 1260px 이상: 지도 전체, 페이지 스크롤 없음
@@ -557,8 +558,8 @@ def test_history_route_distance_matches_kpi(built, page):
 def test_history_bars_sum_to_kpi(page):
     """종류별 판정 막대는 그날 전체 지점(필터와 무관): 종류별 합을 더하면 KPI 위험·주의·정상과 같다."""
     data = embedded(page)
-    kinds = ("step", "slope", "crack", "loose")
-    assert 'const KINDS = ["step", "slope", "crack", "loose"];' in page
+    kinds = ("step", "slope", "uneven", "crack", "loose")
+    assert 'const KINDS = ["step", "slope", "uneven", "crack", "loose"];' in page
     assert "LEVELS.map((lv) => all.filter((e) => e.kind === k && e.level === lv).length)" in page
     for d in data["dates"]:
         evs = d["events"] if d["events"] is not None else data["events"]
@@ -764,12 +765,12 @@ def test_home_robot_card(built, tmp_path):
         with Image.open(out2.parent / "photos" / "robot.png") as im:
             assert im.mode == "RGBA" and im.size == (300, 200)  # 투명 여백을 잘라 로봇만
         # 사진: 카드 안쪽 높이의 약 92%, 오른쪽 아래(아래 10px) 카드 안, 칩과 12px 이상 떨어지게 최대로, 그림자 = 사진 폭의 70%
-        assert ".rc-art.photo { right: 44px; bottom: 10px; width: 45%; height: calc((100% - 32px) * 0.92); opacity: 1; }" in html
+        assert ".rc-art.photo { right: -8px; bottom: -10px; width: 52%; height: calc(100% + 14px); opacity: 1; }" in html
         shadow = html.split(".rc-art.photo::after {", 1)[1].split("}", 1)[0]
         assert "width: calc(var(--shot-w, 100%) * 0.7)" in shadow and "rgb(54 50 54 / 0.12)" in shadow and "blur(8px)" in shadow
         fit = html.split("const fitRobotPhoto = () => {", 1)[1].split("\n      };", 1)[0]
-        assert "const room = box.width - (chipRight + 13);" in fit and "const R = Math.max(16, Math.min(44, room - want));" in fit
-        assert "const w = Math.max(0, Math.min(want, room - R));" in fit and "0.45" not in fit
+        assert "const room = box.width - (chipRight + 4) + 8;" in fit
+        assert "const w = Math.max(0, Math.min(want, room));" in fit and "0.45" not in fit
         assert ".rc-top { position: relative; z-index: 1;" in html and ".rc-art { position: absolute; z-index: 0;" in html  # 버튼이 사진 위
         # 배경이 있는 그림(카드 캡처 등)은 쓰지 않고 그림으로 대체, 지난 사본도 지운다
         Image.new("RGB", (900, 600), (255, 255, 255)).save(built / "robot.png")

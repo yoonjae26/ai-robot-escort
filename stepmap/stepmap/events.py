@@ -30,7 +30,7 @@ FOOT_TRACE_COLUMNS = ["id", "leg", "t", "z_step", "z_mean", "z_lo", "z_hi", "n_n
 BLOCK_COLUMNS = ["block_id", "x", "y", "lat", "lon", "n_steps", "legs", "max_extra_mm"]
 BLOCK_SIZE_M = 0.3  # 블록 격자 크기 기본값 (config.yaml block.size_m)
 
-KIND_UNITS = {"step": "cm", "slope": "deg", "crack": "score", "loose": "mm"}
+KIND_UNITS = {"step": "cm", "slope": "deg", "uneven": "mm", "crack": "score", "loose": "mm"}
 SOURCES = ("camera", "foot", "camera+foot")
 LEVELS = ("ok", "warn", "danger")
 LEGS = ("FR", "FL", "RR", "RL")
@@ -48,6 +48,7 @@ _REQUIRED_NUMERIC = {"t", "x", "y", "value", "confidence"}
 DEFAULT_THRESHOLDS = {
     "step": (1.0, 2.0),      # cm
     "slope": (4.76, 7.13),   # deg (1/12, 1/8)
+    "uneven": (10.0, 20.0),  # mm, 노면 요철: 앞 바닥 높이 편차 (95%-5%). 위험 = 휠체어 회피 기준 2cm와 같은 높이
     "crack": (0.5, 0.8),     # score
     "loose": (3.0, 6.0),     # mm
 }
@@ -78,7 +79,8 @@ def load_config(path: str | Path) -> dict:
 
 def thresholds_from_config(cfg: dict) -> dict[str, tuple[float, float]]:
     th = cfg.get("thresholds") or {}
-    keys = {"step": "step_{}_cm", "slope": "slope_{}_deg", "crack": "crack_{}", "loose": "loose_{}_mm"}
+    keys = {"step": "step_{}_cm", "slope": "slope_{}_deg", "uneven": "uneven_{}_mm", "crack": "crack_{}",
+            "loose": "loose_{}_mm"}
     out = {}
     for kind, key in keys.items():
         warn = float(th.get(key.format("warn"), DEFAULT_THRESHOLDS[kind][0]))
@@ -135,6 +137,9 @@ def criterion_text(kind: str, level: str, thresholds: dict | None = None) -> str
         texts = {"danger": f"휠체어 회피 기준 {fd}({d}°) 이상",
                  "warn": f"주의 기준 {fw}({w}°) 이상 · 회피 기준 {fd} 미만",
                  "ok": f"주의 기준 {fw}({w}°) 미만"}
+    elif kind == "uneven":
+        texts = {"danger": f"노면 요철 {d}mm 이상 (휠체어 회피 기준)", "warn": f"노면 요철 {w}mm 이상 · {d}mm 미만",
+                 "ok": f"노면 요철 {w}mm 미만"}
     elif kind == "crack":
         texts = {"danger": f"균열 점수 {d} 이상", "warn": f"균열 점수 {w} 이상 · {d} 미만", "ok": f"균열 점수 {w} 미만"}
     else:  # loose
@@ -185,6 +190,14 @@ class GeoRef:
         north = (lat - self.origin_lat) * mlat
         east = (lon - self.origin_lon) * mlon
         return east * s + north * c, -east * c + north * s
+
+
+def vworld_key_from_config(cfg: dict) -> str:
+    """VWorld(국토교통부) 지도 인증키: 환경변수 STEPMAP_VWORLD_KEY가 먼저, 없으면 config의 map.vworld_key.
+    키는 공개 저장소에 올리지 않도록 환경변수나 커밋하지 않는 설정 파일에 둔다. 없으면 빈 문자열."""
+    import os
+    key = os.environ.get("STEPMAP_VWORLD_KEY") or str((cfg.get("map") or {}).get("vworld_key") or "")
+    return "" if key.startswith("<") else key
 
 
 def georef_from_config(cfg: dict) -> GeoRef | None:
@@ -667,7 +680,7 @@ MERGE_DEFAULTS = {
     "dedup_radius_m": 1.0,  # 같은 종류(균열·경사) 중복 검출을 하나로 줄이는 거리 (이하)
     "dedup_window_s": 10.0,
 }
-DEDUP_KINDS = ("crack", "slope")
+DEDUP_KINDS = ("crack", "slope", "uneven")
 _EPS = 1e-9
 
 

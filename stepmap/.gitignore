@@ -4,3 +4,6 @@ outputs/photos/
 *.egg-info/
 .pytest_cache/
 ai-robot-escort/
+
+# stepmap live 세션 데이터 (측정 결과·사진, 저장소에 올리지 않음)
+sessions/
