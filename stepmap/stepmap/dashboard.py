@@ -1311,11 +1311,12 @@ _TEMPLATE = r"""<!doctype html>
     ok:     { label: "정상", glyph: "✓",  rank: 1, z: 100 },
   };
   const LEVELS = ["danger", "warn", "ok"];
-  const KINDS = ["step", "slope", "crack", "loose"];
-  // 종류별 모양: 단차 ■ / 경사 ▲ / 균열 ✕ / 흔들림 점선 고리 + 점  (색만으로 구분하지 않음). r = 2px 바탕색 테두리
+  const KINDS = ["step", "slope", "uneven", "crack", "loose"];
+  // 종류별 모양: 단차 ■ / 경사 ▲ / 요철 물결 / 균열 ✕ / 흔들림 점선 고리 + 점  (색만으로 구분하지 않음). r = 2px 바탕색 테두리
   const KIND = {
     step:  { label: "단차",  shape: (c, r) => `<rect x="5" y="5" width="14" height="14" rx="1.5" style="fill:${c};stroke:${r};stroke-width:4;paint-order:stroke"/>` },
     slope: { label: "경사",  shape: (c, r) => `<polygon points="12,3.5 21,19.5 3,19.5" style="fill:${c};stroke:${r};stroke-width:4;stroke-linejoin:round;paint-order:stroke"/>` },
+    uneven: { label: "요철", shape: (c, r) => `<path d="M3 15L7.5 8.5L12 15L16.5 8.5L21 15" style="fill:none;stroke:${r};stroke-width:8;stroke-linecap:round;stroke-linejoin:round"/><path d="M3 15L7.5 8.5L12 15L16.5 8.5L21 15" style="fill:none;stroke:${c};stroke-width:4;stroke-linecap:round;stroke-linejoin:round"/>` },
     crack: { label: "균열",  shape: (c, r) => `<path d="M6 6L18 18M18 6L6 18" style="fill:none;stroke:${r};stroke-width:8;stroke-linecap:round"/><path d="M6 6L18 18M18 6L6 18" style="fill:none;stroke:${c};stroke-width:4;stroke-linecap:round"/>` },
     loose: { label: "흔들림", shape: (c, r) =>
       `<circle cx="12" cy="12" r="9.6" style="fill:none;stroke:${r};stroke-width:4.6"/>` +
@@ -2123,6 +2124,7 @@ _TEMPLATE = r"""<!doctype html>
     step:  { camera: "깊이 카메라 바닥 평면 대비 높이 차", foot: "발 접지 높이 차 (다른 발 대비)",
              "camera+foot": "깊이 카메라 바닥 평면 대비 높이 차 + 발 접지 높이 차 (교차 측정)" },
     slope: { camera: "깊이 카메라 바닥 평면 기울기" },
+    uneven: { camera: "깊이 카메라 바닥 높이 편차 (앞 0.4~1.2m, 95%−5%)" },
     crack: { camera: "RGB 영상 균열 검출 점수 (0~1)" },
     loose: { foot: "관절 각도 → 발끝 위치(정기구학), IMU 중력 정렬, 평소 걸음 대비" },
   };

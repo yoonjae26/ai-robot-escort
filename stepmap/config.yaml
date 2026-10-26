@@ -31,6 +31,8 @@ thresholds:
   step_danger_cm: 2.0
   slope_warn_deg: 4.76
   slope_danger_deg: 7.13
+  uneven_warn_mm: 10.0               # 노면 요철: 앞 바닥 높이 편차 (95%-5%, 깊이 카메라)
+  uneven_danger_mm: 20.0
   crack_warn: 0.5
   crack_danger: 0.8
   loose_warn_mm: 3.0

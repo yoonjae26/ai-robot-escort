@@ -11,8 +11,9 @@ Sources (all optional; whatever is running is used):
              slope [deg], cross slope in the note (StepMap has one slope kind). Place = robot + middle of the ROI ahead.
       step   each confirmed step (>= confirm_n views): |dz| [cm] at robot + step distance ahead. Seeing the same step
              again (same 0.5 m cell) updates it, keeping the closest view.
-  logs/inspect/<session>/state.json (inspect_node.py): sunken / raised tiles, holes, 파손 (broken, damage AI + depth)
-      and 요철 (unevenness) -> step [cm]; 균열 (crack, damage AI, flat) -> crack [score 0-1]; with the snapshot.
+  logs/inspect/<session>/state.json (inspect_node.py): sunken / raised tiles, holes and 파손 (broken, damage AI +
+      depth) -> step [cm]; 요철 (unevenness, floor height spread ahead) -> uneven [mm]; 균열 (crack, damage AI, flat)
+      -> crack [score 0-1]; with the snapshot.
 Photos: camera steps and slopes >= slope_photo_deg get the latest camera picture (photo_src, written by inspect_node
   several times a second, the coloured segmentation view) taken when the event is sent, if it is fresh (< 2 s).
   The camera looks ahead at the measured spot, so the dashboard shows what the robot saw there.
@@ -247,10 +248,12 @@ class Bridge(Node):
             if e["kind"] == "균열":                                   # crack: AI score, StepMap crack_warn/danger
                 self.event(key, "crack", e["score"], "score", e["x"], e["y"], conf,
                            "균열 (AI %.2f, 평평함) · 관측 %d회" % (e["score"], e.get("n_obs", 0)), image, data)
-            elif e["kind"] in ("파손", "요철"):
-                what = "파손 (AI + 깊이)" if e["kind"] == "파손" else "요철 (바닥 높이 편차)"
+            elif e["kind"] == "요철":                                 # unevenness: StepMap uneven [mm]
+                self.event(key, "uneven", abs(e["h_mm"]), "mm", e["x"], e["y"], conf,
+                           "요철 (앞 0.4~1.2m 바닥 높이 편차) · 관측 %d회" % e.get("n_obs", 0), image, data)
+            elif e["kind"] == "파손":
                 self.event(key, "step", abs(e["h_mm"]) / 10.0, "cm", e["x"], e["y"], conf,
-                           "%s %.1f mm · 관측 %d회" % (what, abs(e["h_mm"]), e.get("n_obs", 0)), image, data)
+                           "파손 (AI + 깊이) %.1f mm · 관측 %d회" % (abs(e["h_mm"]), e.get("n_obs", 0)), image, data)
             else:
                 self.event(key, "step", abs(e["h_mm"]) / 10.0, "cm", e["x"], e["y"], conf,
                            "%s %+.1f mm · 면적 %.0f cm² (관측 %d회)" % (e["kind"], e["h_mm"], e.get("area_cm2", 0),

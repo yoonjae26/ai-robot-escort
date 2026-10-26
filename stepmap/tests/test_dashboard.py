@@ -558,8 +558,8 @@ def test_history_route_distance_matches_kpi(built, page):
 def test_history_bars_sum_to_kpi(page):
     """종류별 판정 막대는 그날 전체 지점(필터와 무관): 종류별 합을 더하면 KPI 위험·주의·정상과 같다."""
     data = embedded(page)
-    kinds = ("step", "slope", "crack", "loose")
-    assert 'const KINDS = ["step", "slope", "crack", "loose"];' in page
+    kinds = ("step", "slope", "uneven", "crack", "loose")
+    assert 'const KINDS = ["step", "slope", "uneven", "crack", "loose"];' in page
     assert "LEVELS.map((lv) => all.filter((e) => e.kind === k && e.level === lv).length)" in page
     for d in data["dates"]:
         evs = d["events"] if d["events"] is not None else data["events"]

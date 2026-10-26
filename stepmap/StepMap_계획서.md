@@ -81,7 +81,7 @@
 | `session` | str | `20261020_nohyeong_yeon_A` | 측정 세션 이름 |
 | `x`, `y` | float | `4.42`, `0.36` | odom 좌표 [m] |
 | `lat`, `lon` | float | `33.48606`, `126.48709` | 위도·경도 (`config.yaml` geo로 odom에서 변환, geo 미설정 시 빈칸) |
-| `kind` | enum | `step` / `slope` / `crack` / `loose` | 문제 유형 |
+| `kind` | enum | `step` / `slope` / `uneven` / `crack` / `loose` | 문제 유형 (`uneven`: 노면 요철, 2026-10-26 추가) |
 | `value` | float | `3.7` | 대표값 (카메라 측정 우선) |
 | `unit` | str | `cm` / `deg` / `score` / `mm` | 단위 |
 | `source` | enum | `camera` / `foot` / `camera+foot` | 측정 센서 |
@@ -119,6 +119,7 @@
 |---|---|---|---|
 | step (단차) | ≥ 1.0cm | ≥ 2.0cm | 서울동행맵 휠체어 회피 기준 2cm |
 | slope (경사) | ≥ 4.76° (1/12) | ≥ 7.13° (1/8) | 서울동행맵 기준 1/8 |
+| uneven (요철) | 바닥 높이 편차 ≥ 10mm | ≥ 20mm | 앞 0.4~1.2m 바닥 높이의 95%−5% (깊이 카메라). 위험 = 휠체어 회피 기준 2cm. 임시값, 실측 후 조정 |
 | crack (균열) | 점수 ≥ 0.5 | ≥ 0.8 | 모델 출력 |
 | loose (흔들림) | 추가 침하 ≥ 3mm | ≥ 6mm | 임시값, 스펀지 블럭 실험으로 확정 |
 
@@ -357,6 +358,8 @@ thresholds:
   slope_danger_deg: 7.13
   crack_warn: 0.5
   crack_danger: 0.8
+  uneven_warn_mm: 10.0
+  uneven_danger_mm: 20.0
   loose_warn_mm: 3.0
   loose_danger_mm: 6.0
 merge:                               # stepmap merge (9.3). 거리는 이하(경계 포함)

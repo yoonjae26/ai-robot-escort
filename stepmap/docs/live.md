@@ -73,10 +73,14 @@ Go2에는 GPS가 없다. 로봇과 함께 다니는 **휴대폰(또는 노트북
 | terrain_geometry_node 경사 | `slope` | 종단 경사 절댓값 [°] | 로봇 + 관심영역 가운데 | `slope_every_m`(2 m)마다 OK 추정값 중앙값. 횡단 경사는 note에 |
 | terrain_geometry_node 단차 (3회 연속 확인) | `step` (`camera`) | \|dz\| [cm] | 로봇 + 단차까지 거리 | 같은 0.5 m 칸이면 더 가까이서 본 값으로 갱신 |
 | inspect_node 함몰·돌출·구멍 | `step` (`camera`) | \|높이\| [cm] | 블록 위치 | 사진 `img/<세션>_E<n>.jpg` |
-| (예정) 발 분석 노드 | `loose`, `step` (`foot`) | mm / cm | 접지한 발 위치 | `foot_traces` 함께 전송 |
+| inspect_node + 손상 AI 파손 | `step` (`camera`) | \|높이\| [cm] | 손상 영역 | SegFormer(서피스마스킹 학습) 손상 영역 중 깊이로 10mm 이상 꺼지거나 솟은 곳 |
+| inspect_node + 손상 AI 균열 | `crack` (`camera`) | AI 점수 (0~1) | 손상 영역 | 손상 영역인데 평평한 곳 |
+| surface_seg_node 요철 | `uneven` (`camera`) | 바닥 높이 편차 [mm] | 앞 0.8m | 앞 0.4~1.2m 바닥 높이의 95%−5%, 10mm 이상이 3회 이상 |
+| foot_node (발 접촉) | `loose` (`foot`) | 추가 침하 [mm] | 접지한 발 위치 | 블록(0.3m)마다 다른 발 2개 이상이 기준 이상 침하. `foot_traces`, 이전 사진에 `image_mark` |
 
 ## 팀 결정이 필요한 것
 
+- **요철 기준**: `uneven` 10mm / 20mm는 임시값이다 (휠체어 회피 기준 2cm에 맞춤). 실제 보도 주행으로 조정해야 한다.
 - **횡단 경사**: 법정 기준(권장 ≤2 %, 위험 >4 %)은 종단 경사와 다르다. 지금은 `slope` 하나만 있어 횡단 값은 note에만
   있다. `cross_slope` 종류를 추가할지 정해야 한다.
 - **경사 기준값**: `config.yaml`(4.76° / 7.13°)과 hazard_criteria.yaml(5.56 % = 3.18° / 8.33 % = 4.76°)이 다르다.

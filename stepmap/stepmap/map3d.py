@@ -12,7 +12,7 @@ import json
 from .photos import LEVEL_COLOR
 
 MAP3D_NAME = "map3d.html"
-KIND_KO = {"step": "단차", "slope": "경사", "crack": "균열", "loose": "흔들림"}
+KIND_KO = {"step": "단차", "slope": "경사", "uneven": "요철", "crack": "균열", "loose": "흔들림"}
 LEVEL_KO = {"danger": "위험", "warn": "주의", "ok": "정상"}
 
 _TEMPLATE = r"""<!doctype html>

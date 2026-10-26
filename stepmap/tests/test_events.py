@@ -211,3 +211,12 @@ def test_file_without_image_mark_column_is_read(tmp_path):
     assert row["image_mark"] == ""
     write_events(tmp_path / "new.csv", [row])
     assert (tmp_path / "new.csv").read_text(encoding="utf-8-sig").splitlines()[0].endswith(",image_mark")
+
+
+def test_uneven_kind():
+    """노면 요철 (깊이 카메라 바닥 높이 편차, mm): 판정·기준 문구·config 키."""
+    from stepmap.events import KIND_UNITS, criterion_text, thresholds_from_config
+    assert KIND_UNITS["uneven"] == "mm"
+    assert judge("uneven", 9.9) == "ok" and judge("uneven", 10.0) == "warn" and judge("uneven", 25.0) == "danger"
+    assert criterion_text("uneven", "danger") == "노면 요철 20mm 이상 (휠체어 회피 기준)"
+    assert thresholds_from_config({"thresholds": {"uneven_warn_mm": 8, "uneven_danger_mm": 15}})["uneven"] == (8.0, 15.0)
